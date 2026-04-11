@@ -1,0 +1,9 @@
+#!/bin/sh
+# Replace opkg sources with USTC mirror on first boot
+# If USTC is unavailable, edit /etc/opkg/distfeeds.conf manually
+
+sed -e 's|https://downloads.immortalwrt.org|https://mirrors.ustc.edu.cn/immortalwrt|g' \
+   -e 's|https://mirrors.vsean.net/openwrt|https://mirrors.ustc.edu.cn/immortalwrt|g' \
+   -i /etc/opkg/distfeeds.conf
+
+exit 0

@@ -1,0 +1,110 @@
+#!/bin/sh
+# MgrServer 端口配置 + LuCI 端口迁移
+# 对齐 deploy-openwrt.sh Step 5.1-5.3 逻辑
+
+MGR_PORT="80"
+LUCI_PORT="3500"
+
+# 确保脚本无论成功失败都会被清理，防止重复执行
+trap 'rm -f "$0"' EXIT
+
+# ============================================================
+# MgrServer 基础配置
+# ============================================================
+
+# 确保 /etc/mgrserver 目录存在 (deploy 脚本通过 SSH mkdir 创建)
+mkdir -p /etc/mgrserver
+chmod 700 /etc/mgrserver
+
+if [ ! -f /etc/config/mgrserver ]; then
+  touch /etc/config/mgrserver
+fi
+uci -q get mgrserver.main >/dev/null 2>&1 || uci set mgrserver.main=mgrserver
+uci set mgrserver.main.port="$MGR_PORT"
+uci commit mgrserver
+
+# ============================================================
+# 端口冲突处理: MgrServer→:80, LuCI→:3500
+# 与 deploy-openwrt.sh Step 5.1-5.3 逻辑对齐
+# ============================================================
+
+NGINX_ENABLED=0
+if [ -x /etc/init.d/nginx ] && /etc/init.d/nginx enabled >/dev/null 2>&1; then
+  NGINX_ENABLED=1
+fi
+
+UHTTPD_SECTIONS="$(uci show uhttpd 2>/dev/null | awk -F'[.=]' '/=uhttpd$/ {print $2}')"
+if [ -z "$UHTTPD_SECTIONS" ]; then
+  UHTTPD_SECTION="$(uci add uhttpd uhttpd)"
+  UHTTPD_SECTIONS="$UHTTPD_SECTION"
+else
+  if echo "$UHTTPD_SECTIONS" | grep -qx main; then
+    UHTTPD_SECTION="main"
+  else
+    UHTTPD_SECTION="$(echo "$UHTTPD_SECTIONS" | head -n1)"
+  fi
+fi
+
+for sec in $UHTTPD_SECTIONS; do
+  uci -q del_list uhttpd."$sec".listen_http="0.0.0.0:80"
+  uci -q del_list uhttpd."$sec".listen_http="[::]:80"
+  if [ "$NGINX_ENABLED" = "1" ]; then
+    uci -q del_list uhttpd."$sec".listen_http="0.0.0.0:$LUCI_PORT"
+    uci -q del_list uhttpd."$sec".listen_http="[::]:$LUCI_PORT"
+  fi
+done
+
+if [ "$NGINX_ENABLED" != "1" ]; then
+  uci set uhttpd."$UHTTPD_SECTION".enabled="1"
+  uci -q delete uhttpd."$UHTTPD_SECTION".listen_http
+  uci add_list uhttpd."$UHTTPD_SECTION".listen_http="0.0.0.0:$LUCI_PORT"
+  uci add_list uhttpd."$UHTTPD_SECTION".listen_http="[::]:$LUCI_PORT"
+fi
+
+uci commit uhttpd
+/etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+
+if [ "$NGINX_ENABLED" = "1" ]; then
+  NGINX_SECTIONS="$(uci show nginx 2>/dev/null | awk -F'[.=]' '/=server$/ {print $2}')"
+  NGINX_CHANGED=0
+  for sec in $NGINX_SECTIONS; do
+    LISTENS_RAW="$(uci show nginx."$sec".listen 2>/dev/null | sed -n "s/^nginx\.${sec}\.listen=//p")"
+    [ -n "$LISTENS_RAW" ] || continue
+    NEW_LISTENS=""
+    SEC_CHANGED=0
+
+    # 安全遍历: 不使用 eval，直接 for-in
+    for entry in $LISTENS_RAW; do
+      [ -n "$entry" ] || continue
+      new_entry="$(printf '%s' "$entry" | sed -E "s/(^|[^0-9])80([^0-9]|$)/\\1$LUCI_PORT\\2/g")"
+      if [ "$new_entry" != "$entry" ]; then
+        SEC_CHANGED=1
+      fi
+      NEW_LISTENS="${NEW_LISTENS}${new_entry}
+"
+    done
+
+    if [ "$SEC_CHANGED" = "1" ]; then
+      NGINX_CHANGED=1
+      uci -q delete nginx."$sec".listen
+      while IFS= read -r new_entry; do
+        [ -n "$new_entry" ] || continue
+        uci add_list nginx."$sec".listen="$new_entry"
+      done <<EOF_LISTEN_DST
+$NEW_LISTENS
+EOF_LISTEN_DST
+    fi
+  done
+
+  if [ "$NGINX_CHANGED" = "1" ]; then
+    uci commit nginx
+    /etc/init.d/nginx restart >/dev/null 2>&1 || /etc/init.d/nginx start >/dev/null 2>&1 || true
+  fi
+fi
+
+# ============================================================
+# 启用 MgrServer 服务
+# ============================================================
+/etc/init.d/mgrserver enable >/dev/null 2>&1 || true
+
+exit 0

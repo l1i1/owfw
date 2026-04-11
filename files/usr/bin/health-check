@@ -1,0 +1,231 @@
+#!/bin/sh
+# Service Health Check Script for OpenWrt
+# Checks all critical services and reports status
+
+# Do not use set -e - we want to report all issues, not exit on first failure
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo "============================================"
+echo "  OpenWrt Service Health Check"
+echo "  $(date '+%Y-%m-%d %H:%M:%S')"
+echo "============================================"
+echo ""
+
+FAILED=0
+WARNINGS=0
+
+# Check if a process is running
+check_process() {
+  local name="$1"
+  local pidfile="$2"
+
+  if [ -f "$pidfile" ]; then
+    local pid=$(cat "$pidfile")
+    if [ -d "/proc/$pid" ]; then
+      echo -e "${GREEN}[OK]${NC} $name (PID: $pid)"
+      return 0
+    fi
+  fi
+
+  # Try ps as fallback (pgrep not available in OpenWrt base)
+  # Match exact command name to avoid false positives
+  if ps | grep -v grep | grep -qE "^\s*[0-9]+\s+.*\b$name\b"; then
+    echo -e "${GREEN}[OK]${NC} $name (running)"
+    return 0
+  fi
+
+  echo -e "${RED}[FAIL]${NC} $name (not running)"
+  FAILED=$((FAILED + 1))
+  return 1
+}
+
+# Check HTTP endpoint
+check_http() {
+  local name="$1"
+  local url="$2"
+  local timeout="${3:-5}"
+  
+  if curl -s --connect-timeout "$timeout" --max-time "$((timeout * 2))" "$url" >/dev/null 2>&1; then
+    echo -e "${GREEN}[OK]${NC} $name HTTP"
+    return 0
+  else
+    echo -e "${RED}[FAIL]${NC} $name HTTP (no response)"
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
+}
+
+# Check TCP port
+check_port() {
+  local name="$1"
+  local port="$2"
+
+  # Use ss instead of deprecated netstat
+  if ss -tuln 2>/dev/null | grep -q ":${port} "; then
+    echo -e "${GREEN}[OK]${NC} $name (port $port listening)"
+    return 0
+  else
+    echo -e "${RED}[FAIL]${NC} $name (port $port not listening)"
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
+}
+
+# Check binary exists
+check_binary() {
+  local name="$1"
+  local path="$2"
+  
+  if [ -x "$path" ]; then
+    echo -e "${GREEN}[OK]${NC} $name binary"
+    return 0
+  else
+    echo -e "${RED}[FAIL]${NC} $name binary (not found: $path)"
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
+}
+
+# Check directory
+check_dir() {
+  local name="$1"
+  local path="$2"
+  local required="${3:-optional}"
+  
+  if [ -d "$path" ]; then
+    echo -e "${GREEN}[OK]${NC} $name directory"
+    return 0
+  else
+    if [ "$required" = "required" ]; then
+      echo -e "${RED}[FAIL]${NC} $name directory (not found: $path)"
+      FAILED=$((FAILED + 1))
+      return 1
+    else
+      echo -e "${YELLOW}[WARN]${NC} $name directory (not found: $path)"
+      WARNINGS=$((WARNINGS + 1))
+      return 0
+    fi
+  fi
+}
+
+# Check disk space
+check_disk() {
+  local path="$1"
+  local min_percent="${2:-10}"
+  
+  local used=$(df "$path" 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%')
+  local avail=$(df -h "$path" 2>/dev/null | tail -1 | awk '{print $4}')
+  
+  if [ -n "$used" ]; then
+    local free=$((100 - used))
+    if [ "$free" -ge "$min_percent" ]; then
+      echo -e "${GREEN}[OK]${NC} Disk $path (${free}% free, ${avail} available)"
+      return 0
+    else
+      echo -e "${YELLOW}[WARN]${NC} Disk $path (only ${free}% free, ${avail} available)"
+      WARNINGS=$((WARNINGS + 1))
+      return 0
+    fi
+  fi
+  
+  echo -e "${YELLOW}[WARN]${NC} Disk $path (unable to check)"
+  WARNINGS=$((WARNINGS + 1))
+  return 0
+}
+
+# Check memory
+check_memory() {
+  local min_mb="${1:-50}"
+
+  # Read from /proc/meminfo instead of parsing free output
+  local mem_free_kb=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}')
+  if [ -z "$mem_free_kb" ]; then
+    mem_free_kb=$(grep MemFree /proc/meminfo 2>/dev/null | awk '{print $2}')
+  fi
+
+  if [ -n "$mem_free_kb" ]; then
+    local mem_free=$((mem_free_kb / 1024))
+    if [ "$mem_free" -ge "$min_mb" ]; then
+      echo -e "${GREEN}[OK]${NC} Memory (${mem_free}MB available)"
+      return 0
+    else
+      echo -e "${YELLOW}[WARN]${NC} Memory (only ${mem_free}MB available)"
+      WARNINGS=$((WARNINGS + 1))
+      return 0
+    fi
+  else
+    echo -e "${YELLOW}[WARN]${NC} Memory (unable to check)"
+    WARNINGS=$((WARNINGS + 1))
+    return 0
+  fi
+}
+
+echo "=== Core Services ==="
+check_process "procd" "/var/run/procd.pid"
+check_process "ubusd" "/var/run/ubus.sock"
+check_process "logd" "/var/run/logd.pid"
+check_process "netifd" "/var/run/netifd.pid"
+
+echo ""
+echo "=== MgrServer ==="
+check_binary "node" "/usr/bin/node"
+check_dir "MgrServer app" "/root/mgrserver" "required"
+check_process "mgrserver" "/var/run/mgrserver.pid"
+check_http "MgrServer" "http://127.0.0.1:80/health" 5
+
+echo ""
+echo "=== Network Services ==="
+check_port "uhttpd" "80"
+check_port "LuCI" "3500"
+check_port "dnsmasq" "53"
+check_port "dnsmasq (DHCP)" "67"
+
+echo ""
+echo "=== Optional Services ==="
+check_binary "sing-box" "/usr/bin/sing-box"
+check_binary "easytier-core" "/usr/bin/easytier-core"
+check_process "sing-box" "/var/run/sing-box.pid"
+check_process "easytier" "/var/run/easytier.pid"
+
+echo ""
+echo "=== System Resources ==="
+check_disk "/" 10
+check_disk "/overlay" 10
+check_dir "PXE resources" "/home/pxe" "optional"
+check_memory 50
+
+echo ""
+echo "=== Network Connectivity ==="
+if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+  echo -e "${GREEN}[OK]${NC} Internet connectivity (8.8.8.8)"
+else
+  echo -e "${YELLOW}[WARN]${NC} Internet connectivity (8.8.8.8 unreachable)"
+  WARNINGS=$((WARNINGS + 1))
+fi
+
+if ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1; then
+  echo -e "${GREEN}[OK]${NC} Internet connectivity (1.1.1.1)"
+else
+  echo -e "${YELLOW}[WARN]${NC} Internet connectivity (1.1.1.1 unreachable)"
+  WARNINGS=$((WARNINGS + 1))
+fi
+
+echo ""
+echo "============================================"
+echo "  Summary"
+echo "============================================"
+echo -e "Failed: ${RED}${FAILED}${NC}"
+echo -e "Warnings: ${YELLOW}${WARNINGS}${NC}"
+echo ""
+
+if [ "$FAILED" -eq 0 ]; then
+  echo -e "${GREEN}All critical services are healthy${NC}"
+  exit 0
+else
+  echo -e "${RED}Some services are not running properly${NC}"
+  exit 1
+fi

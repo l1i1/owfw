@@ -1,0 +1,11 @@
+#!/bin/sh
+# Setup cron job for service watchdog
+# Runs every 5 minutes to check service health
+
+# Add cron job for service watchdog
+(crontab -l 2>/dev/null | grep -v "service-watchdog"; echo "*/5 * * * * /usr/bin/service-watchdog") | crontab -
+
+# Restart cron
+/etc/init.d/cron restart
+
+exit 0

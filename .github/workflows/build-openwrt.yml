@@ -1,0 +1,493 @@
+name: Build OpenWrt for JDCloud AX1800 Pro
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: 'SSH connection to Actions'
+        required: false
+        default: 'false'
+      mgrserver_repo:
+        description: 'MgrServer repo (owner/repo)'
+        required: false
+        default: 'l1i1/MgrServer'
+      mgrserver_branch:
+        description: 'MgrServer branch'
+        required: false
+        default: 'main'
+
+env:
+  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_BRANCH: master
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: configs/jdc-ax1800pro.config
+  DIY_P1_SH: scripts/diy-part1.sh
+  DIY_P2_SH: scripts/diy-part2.sh
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: true
+  TZ: Asia/Shanghai
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Check Server Performance
+      run: |
+        echo "CPU核心: $(nproc)"
+        echo "内存: $(free -h | grep Mem | awk '{print $2}')"
+        df -hT
+
+    - name: Free Disk Space
+      uses: jlumbroso/free-disk-space@v1.3.1
+      with:
+        tool-cache: false
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: false
+
+    - name: Disk Space After Cleanup
+      run: df -hT
+
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # ================================================================
+    # MgrServer: build and stage into files overlay
+    # ================================================================
+    - name: Setup Node.js for MgrServer build
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10
+
+    - name: Clone and build MgrServer
+      env:
+        MGRSERVER_REPO: ${{ github.event.inputs.mgrserver_repo || 'l1i1/MgrServer' }}
+        MGRSERVER_BRANCH: ${{ github.event.inputs.mgrserver_branch || 'main' }}
+      run: |
+        echo "Cloning MgrServer from ${MGRSERVER_REPO}@${MGRSERVER_BRANCH}..."
+        git clone --depth=1 --branch "$MGRSERVER_BRANCH" \
+          "https://x-access-token:${{ secrets.MGRSERVER_TOKEN }}@github.com/${MGRSERVER_REPO}.git" "$GITHUB_WORKSPACE/mgrserver-src"
+
+        cd "$GITHUB_WORKSPACE/mgrserver-src"
+        echo "Installing dependencies..."
+        pnpm install --frozen-lockfile || pnpm install
+
+        echo "Building MgrServer..."
+        pnpm build
+
+        echo "Staging runtime to OpenWrt files overlay..."
+        MGR_DEST="$GITHUB_WORKSPACE/files/root/mgrserver"
+        mkdir -p "$MGR_DEST"
+
+        # Use pnpm deploy to produce a standalone production bundle
+        pnpm --filter @mgr/server deploy --legacy --prod "$MGR_DEST"
+
+        # Copy commands.json
+        if [ -f packages/server/commands.json ]; then
+          cp packages/server/commands.json "$MGR_DEST/"
+        fi
+
+        # Copy web UI static assets
+        if [ -d packages/web/dist ]; then
+          cp -r packages/web/dist "$MGR_DEST/web-dist"
+        else
+          echo "WARNING: packages/web/dist not found"
+        fi
+
+        # Prune unnecessary files from node_modules to save space
+        cd "$MGR_DEST"
+        find node_modules -type d \( -name '.bin' -o -name '.cache' -o -name '@types' \
+          -o -name 'test' -o -name 'tests' -o -name '__tests__' -o -name 'coverage' \
+          -o -name 'docs' -o -name 'doc' -o -name 'website' -o -name 'example' \
+          -o -name 'examples' \) -exec rm -rf {} + 2>/dev/null || true
+        find node_modules -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.d.ts' \
+          -o -name '*.map' -o -name '*.md' -o -name '*.markdown' -o -name 'CHANGELOG*' \
+          -o -name 'README*' -o -name 'LICENSE*' -o -name '*.tgz' \
+          -o -name 'tsconfig*.json' \) -delete 2>/dev/null || true
+
+        echo "MgrServer staged at: $MGR_DEST"
+        du -sh "$MGR_DEST"
+
+    # ================================================================
+    # PXE resources: stage into files/home/pxe/
+    # ================================================================
+    - name: Stage PXE resources
+      run: |
+        PXE_SRC="$GITHUB_WORKSPACE/mgrserver-src/pxe-server"
+        if [ -d "$PXE_SRC/pxe" ]; then
+          PXE_DEST="$GITHUB_WORKSPACE/files/home/pxe"
+          echo "Staging PXE resources from $PXE_SRC/pxe -> $PXE_DEST"
+          mkdir -p "$PXE_DEST"
+          cp -r "$PXE_SRC/pxe/"* "$PXE_DEST/"
+
+          # Copy utility scripts
+          if [ -d "$PXE_SRC/util" ]; then
+            mkdir -p "$PXE_DEST/util"
+            cp "$PXE_SRC/util/"*.sh "$PXE_DEST/util/" 2>/dev/null || true
+          fi
+          # Copy top-level scripts
+          [ -f "$PXE_SRC/set_pxe.sh" ] && cp "$PXE_SRC/set_pxe.sh" "$PXE_DEST/"
+          [ -f "$PXE_SRC/up_pxe_res.sh" ] && cp "$PXE_SRC/up_pxe_res.sh" "$PXE_DEST/"
+
+          # Fix line endings (Windows CRLF -> Unix LF)
+          find "$PXE_DEST" -name "*.sh" -exec sed -i 's/\r$//' {} + 2>/dev/null || true
+          find "$PXE_DEST" -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
+
+          echo "PXE resources staged at: $PXE_DEST"
+          du -sh "$PXE_DEST"
+        else
+          echo "ERROR: No PXE resources found at $PXE_SRC/pxe"
+          exit 1
+        fi
+
+    # ================================================================
+    # Prebuilt IPKs: extract into files/ to bake into firmware
+    # Avoids compiling Rust binaries (EasyTier) and Go binaries (sing-box) from source
+    # IPK format: tar.gz containing data.tar.gz (which contains actual files)
+    # ================================================================
+    - name: Extract prebuilt IPKs into files overlay
+      run: |
+        set -e  # Exit on any error
+        
+        echo "============================================"
+        echo "Extracting prebuilt IPKs into files/ overlay"
+        echo "============================================"
+        mkdir -p "$GITHUB_WORKSPACE/files/usr"
+
+        # Helper function: download with retry
+        download_with_retry() {
+          local url="$1"
+          local output="$2"
+          local max_retries=3
+          local retry_delay=10
+          
+          for i in $(seq 1 $max_retries); do
+            echo "Downloading (attempt $i/$max_retries): $url"
+            if curl -sL --connect-timeout 30 --max-time 300 --retry 2 "$url" -o "$output"; then
+              if [ -s "$output" ]; then
+                echo "  ✓ Download successful: $(du -h "$output" | cut -f1)"
+                return 0
+              fi
+            fi
+            echo "  ✗ Download failed, retrying in ${retry_delay}s..."
+            sleep $retry_delay
+          done
+          echo "ERROR: Failed to download after $max_retries attempts: $url"
+          return 1
+        }
+
+        # Helper function: extract IPK with validation
+        extract_ipk() {
+          local ipk_path="$1"
+          local dest="$2"
+          local expected_files="$3"
+          
+          if [ ! -f "$ipk_path" ]; then
+            echo "ERROR: IPK file not found: $ipk_path"
+            return 1
+          fi
+          
+          echo "Extracting: $(basename "$ipk_path")"
+          mkdir -p /tmp/ipk-work
+          if ! tar -xzf "$ipk_path" -C /tmp/ipk-work/; then
+            echo "ERROR: Failed to extract IPK outer archive"
+            rm -rf /tmp/ipk-work
+            return 1
+          fi
+          
+          if [ ! -f /tmp/ipk-work/data.tar.gz ]; then
+            echo "ERROR: data.tar.gz not found in IPK"
+            rm -rf /tmp/ipk-work
+            return 1
+          fi
+          
+          if ! tar -xzf /tmp/ipk-work/data.tar.gz -C "$dest/"; then
+            echo "ERROR: Failed to extract data.tar.gz"
+            rm -rf /tmp/ipk-work
+            return 1
+          fi
+          
+          rm -rf /tmp/ipk-work
+          
+          # Validate expected files exist
+          for f in $expected_files; do
+            if [ ! -e "$dest/$f" ]; then
+              echo "ERROR: Expected file not found after extraction: $dest/$f"
+              return 1
+            fi
+          done
+          
+          echo "  ✓ Extraction successful"
+          return 0
+        }
+
+        # EasyTier (aarch64_cortex-a53)
+        EASYTIER_VER="v2.5.0"
+        EASYTIER_URL="https://github.com/EasyTier/luci-app-easytier/releases/download/${EASYTIER_VER}/EasyTier-${EASYTIER_VER}-aarch64_cortex-a53-22.03.7.zip"
+        
+        download_with_retry "$EASYTIER_URL" /tmp/easytier.zip
+        unzip -o /tmp/easytier.zip -d /tmp/easytier-ipk/
+
+        # Extract easytier core binary
+        EASY_IPK=$(find /tmp/easytier-ipk/ -name "easytier_*.ipk" | head -1)
+        extract_ipk "$EASY_IPK" "$GITHUB_WORKSPACE/files" \
+          "usr/bin/easytier-core usr/bin/easytier-cli usr/bin/easytier-web"
+
+        # Extract luci-app-easytier LuCI plugin
+        LUCI_EASY_IPK=$(find /tmp/easytier-ipk/ -name "luci-app-easytier_*.ipk" | head -1)
+        extract_ipk "$LUCI_EASY_IPK" "$GITHUB_WORKSPACE/files" \
+          "usr/lib/lua/luci/controller/easytier.lua"
+
+        # Extract i18n package
+        I18N_EASY_IPK=$(find /tmp/easytier-ipk/ -name "luci-i18n-easytier-zh-cn_*.ipk" | head -1)
+        if [ -n "$I18N_EASY_IPK" ]; then
+          extract_ipk "$I18N_EASY_IPK" "$GITHUB_WORKSPACE/files" ""
+        fi
+        rm -rf /tmp/easytier.zip /tmp/easytier-ipk/
+
+        # sing-box (aarch64_cortex-a53)
+        SINGBOX_VER="1.13.3"
+        SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box_${SINGBOX_VER}_openwrt_aarch64_cortex-a53.ipk"
+        
+        download_with_retry "$SINGBOX_URL" /tmp/sing-box.ipk
+        extract_ipk /tmp/sing-box.ipk "$GITHUB_WORKSPACE/files" \
+          "usr/bin/sing-box"
+        rm -f /tmp/sing-box.ipk
+
+        echo ""
+        echo "============================================"
+        echo "Prebuilt files summary:"
+        echo "============================================"
+        echo "Binaries:"
+        ls -lh "$GITHUB_WORKSPACE/files/usr/bin/" 2>/dev/null || true
+        echo ""
+        echo "LuCI plugins:"
+        ls -la "$GITHUB_WORKSPACE/files/usr/lib/lua/luci/controller/" 2>/dev/null || true
+        echo ""
+        echo "Sizes:"
+        du -sh "$GITHUB_WORKSPACE/files/usr/bin/"* 2>/dev/null || true
+
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        docker rmi $(docker images -q) 2>/dev/null || true
+        sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
+        sudo -E apt-get -y purge azure-cli ghc* zulu* llvm* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
+        sudo -E apt-get -y update
+        sudo -E apt-get -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
+          git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev \
+          libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev \
+          libssl-dev libtool lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 \
+          python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig \
+          texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+        sudo -E systemctl daemon-reload
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get -y clean
+        sudo pip3 install --upgrade pip
+        sudo pip3 install --upgrade setuptools wheel build pyproject-hooks
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: Clone source code
+      working-directory: /workdir
+      run: |
+        df -hT $PWD
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: Load custom feeds
+      run: |
+        [ -e $FEEDS_CONF ] && cp $FEEDS_CONF openwrt/feeds.conf.default
+        chmod +x $DIY_P1_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P1_SH
+
+    - name: Update feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    - name: Install feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    - name: Load custom configuration
+      run: |
+        [ -e files ] && cp -r files openwrt/files
+        [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
+        chmod +x $DIY_P2_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P2_SH
+
+    - name: SSH connection to Actions
+      uses: P3TERX/ssh2actions@v1.0.0
+      if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
+      env:
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+    - name: Download package
+      id: package
+      run: |
+        cd openwrt
+        make defconfig
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile the firmware
+      id: compile
+      run: |
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Check space usage
+      if: (!cancelled())
+      run: df -hT
+
+    - name: Organize files
+      id: organize
+      if: steps.compile.outputs.status == 'success' && !cancelled()
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        # Keep original filenames - do not rename
+        # The firmware files already have proper names like:
+        # immortalwrt-qualcommax-ipq60xx-jdcloud_re-ss-01-squashfs-sysupgrade.bin
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "Files to be released:"
+        ls -la
+
+    - name: Verify firmware files
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      run: |
+        cd ${{ env.FIRMWARE }}
+        echo "============================================"
+        echo "Verifying firmware files..."
+        echo "============================================"
+        
+        # Check for sysupgrade.bin
+        SYSUPGRADE=$(find . -name "*squashfs-sysupgrade.bin" | head -1)
+        if [ -n "$SYSUPGRADE" ]; then
+          SIZE=$(stat -c%s "$SYSUPGRADE" 2>/dev/null || stat -f%z "$SYSUPGRADE" 2>/dev/null)
+          SIZE_MB=$((SIZE / 1024 / 1024))
+          echo "✓ sysupgrade.bin found: $SYSUPGRADE ($SIZE_MB MB)"
+          if [ "$SIZE_MB" -lt 10 ]; then
+            echo "✗ ERROR: sysupgrade.bin is too small ($SIZE_MB MB), expected >10MB"
+            exit 1
+          fi
+        else
+          echo "✗ ERROR: sysupgrade.bin not found!"
+          exit 1
+        fi
+        
+        # Check for factory.bin
+        FACTORY=$(find . -name "*squashfs-factory.bin" | head -1)
+        if [ -n "$FACTORY" ]; then
+          SIZE=$(stat -c%s "$FACTORY" 2>/dev/null || stat -f%z "$FACTORY" 2>/dev/null)
+          SIZE_MB=$((SIZE / 1024 / 1024))
+          echo "✓ factory.bin found: $FACTORY ($SIZE_MB MB)"
+          if [ "$SIZE_MB" -lt 10 ]; then
+            echo "✗ ERROR: factory.bin is too small ($SIZE_MB MB), expected >10MB"
+            exit 1
+          fi
+        else
+          echo "✗ ERROR: factory.bin not found!"
+          echo "  Expected: immortalwrt-qualcommax-ipq60xx-jdcloud_re-ss-01-squashfs-factory.bin"
+          exit 1
+        fi
+        
+        # Check for initramfs
+        INITRAMFS=$(find . -name "*initramfs-uImage.itb" | head -1)
+        if [ -n "$INITRAMFS" ]; then
+          SIZE=$(stat -c%s "$INITRAMFS" 2>/dev/null || stat -f%z "$INITRAMFS" 2>/dev/null)
+          SIZE_MB=$((SIZE / 1024 / 1024))
+          echo "✓ initramfs found: $INITRAMFS ($SIZE_MB MB)"
+        else
+          echo "⚠ WARNING: initramfs not found"
+        fi
+        
+        echo ""
+        echo "============================================"
+        echo "Firmware verification complete"
+        echo "============================================"
+
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@v4
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+
+    - name: Generate release tag
+      id: tag
+      if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success' && !cancelled()
+      run: |
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        touch release.txt
+        echo "## 京东云亚瑟 AX1800 Pro OpenWrt 固件 (含 MgrServer)" >> release.txt
+        echo "" >> release.txt
+        echo "### 固件信息" >> release.txt
+        echo "- 源码: ImmortalWrt (GitHub)" >> release.txt
+        echo "- 设备: JDCloud RE-SS-01 (AX1800 Pro)" >> release.txt
+        echo "- 编译时间: $(date +"%Y-%m-%d %H:%M")" >> release.txt
+        echo "" >> release.txt
+        echo "### 已包含" >> release.txt
+        echo "- MgrServer (路由器管理后台, 端口 80)" >> release.txt
+        echo "- Node.js 20.x + npm" >> release.txt
+        echo "- Python3 (25 子包)" >> release.txt
+        echo "- sing-box (预编译 IPK)" >> release.txt
+        echo "- easytier v2.5.0 + luci-app-easytier (预编译 IPK)" >> release.txt
+        echo "- NSS 硬件加速" >> release.txt
+        echo "- PXE 启动资源 (/home/pxe)" >> release.txt
+        echo "- /home 分区自动挂载" >> release.txt
+        echo "" >> release.txt
+        echo "### 默认设置" >> release.txt
+        echo "- MgrServer: http://192.168.1.1 (密码: password)" >> release.txt
+        echo "- LuCI: http://192.168.1.1:3500" >> release.txt
+        echo "- 用户名: root" >> release.txt
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload firmware to release
+      uses: softprops/action-gh-release@v1
+      if: steps.tag.outputs.status == 'success' && !cancelled()
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        body_path: release.txt
+        files: ${{ env.FIRMWARE }}/*
+
+    - name: Delete workflow runs
+      uses: Mattraks/delete-workflow-runs@v2
+      with:
+        retain_days: 1
+        keep_minimum_runs: 3
+
+    - name: Remove old Releases
+      uses: dev-drprasad/delete-older-releases@v0.3.3
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 5
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

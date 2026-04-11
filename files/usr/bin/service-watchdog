@@ -1,0 +1,100 @@
+#!/bin/sh
+# Service Watchdog Script for OpenWrt
+# Monitors critical services and restarts them if they fail
+
+LOG_TAG="service-watchdog"
+LOG_FILE="/var/log/service-watchdog.log"
+MAX_LOG_SIZE="512K"
+MAX_LOG_FILES=3
+
+# Services to monitor: name:pidfile:check_command:start_command
+SERVICES="mgrserver:/var/run/mgrserver.pid:curl -s http://127.0.0.1:80/health:/etc/init.d/mgrserver restart"
+
+log() {
+  local level="$1"
+  shift
+  local msg="$*"
+  logger -t "$LOG_TAG" -p "daemon.$level" "$msg"
+  
+  # Rotate log if needed
+  if [ -f "$LOG_FILE" ]; then
+    local size=$(du -k "$LOG_FILE" 2>/dev/null | cut -f1)
+    if [ -n "$size" ] && [ "$size" -gt 512 ]; then
+      mv "$LOG_FILE" "$LOG_FILE.1" 2>/dev/null
+    fi
+  fi
+  
+  echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $msg" >> "$LOG_FILE"
+}
+
+# Check if a service is healthy
+check_service() {
+  local name="$1"
+  local pidfile="$2"
+  local check_cmd="$3"
+
+  # Check if PID file exists and process is running
+  if [ -f "$pidfile" ]; then
+    local pid=$(cat "$pidfile")
+    if [ ! -d "/proc/$pid" ]; then
+      log "warn" "$name: PID $pid not running"
+      return 1
+    fi
+  else
+    log "warn" "$name: PID file not found"
+    return 1
+  fi
+
+  # Run custom health check if provided
+  if [ -n "$check_cmd" ]; then
+    # Use sh -c instead of eval for safety
+    if ! sh -c "$check_cmd" >/dev/null 2>&1; then
+      log "warn" "$name: health check failed"
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
+# Restart a service
+restart_service() {
+  local name="$1"
+  local start_cmd="$2"
+
+  log "info" "$name: attempting restart"
+
+  # Use sh -c instead of eval for safety
+  if sh -c "$start_cmd" 2>&1; then
+    log "info" "$name: restart successful"
+    return 0
+  else
+    log "err" "$name: restart failed"
+    return 1
+  fi
+}
+
+# Main watchdog loop
+main() {
+  log "info" "Service watchdog started"
+
+  for service in $SERVICES; do
+    # Parse service definition (avoid bash here-string)
+    name="${service%%:*}"
+    rest="${service#*:}"
+    pidfile="${rest%%:*}"
+    rest="${rest#*:}"
+    check_cmd="${rest%%:*}"
+    start_cmd="${rest#*:}"
+
+    if ! check_service "$name" "$pidfile" "$check_cmd"; then
+      log "warn" "$name: service unhealthy, restarting..."
+      restart_service "$name" "$start_cmd"
+    fi
+  done
+
+  log "info" "Service watchdog check completed"
+}
+
+# Run main function
+main "$@"
