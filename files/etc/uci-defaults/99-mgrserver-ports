@@ -48,17 +48,24 @@ fi
 for sec in $UHTTPD_SECTIONS; do
   uci -q del_list uhttpd."$sec".listen_http="0.0.0.0:80"
   uci -q del_list uhttpd."$sec".listen_http="[::]:80"
+  uci -q del_list uhttpd."$sec".listen_https="0.0.0.0:443"
+  uci -q del_list uhttpd."$sec".listen_https="[::]:443"
   if [ "$NGINX_ENABLED" = "1" ]; then
     uci -q del_list uhttpd."$sec".listen_http="0.0.0.0:$LUCI_PORT"
     uci -q del_list uhttpd."$sec".listen_http="[::]:$LUCI_PORT"
+    uci -q del_list uhttpd."$sec".listen_https="0.0.0.0:$LUCI_PORT"
+    uci -q del_list uhttpd."$sec".listen_https="[::]:$LUCI_PORT"
   fi
 done
 
 if [ "$NGINX_ENABLED" != "1" ]; then
   uci set uhttpd."$UHTTPD_SECTION".enabled="1"
   uci -q delete uhttpd."$UHTTPD_SECTION".listen_http
+  uci -q delete uhttpd."$UHTTPD_SECTION".listen_https
   uci add_list uhttpd."$UHTTPD_SECTION".listen_http="0.0.0.0:$LUCI_PORT"
   uci add_list uhttpd."$UHTTPD_SECTION".listen_http="[::]:$LUCI_PORT"
+  uci add_list uhttpd."$UHTTPD_SECTION".listen_https="0.0.0.0:$LUCI_PORT"
+  uci add_list uhttpd."$UHTTPD_SECTION".listen_https="[::]:$LUCI_PORT"
 fi
 
 uci commit uhttpd

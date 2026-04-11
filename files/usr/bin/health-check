@@ -179,7 +179,6 @@ check_http "MgrServer" "http://127.0.0.1:80/health" 5
 
 echo ""
 echo "=== Network Services ==="
-check_port "uhttpd" "80"
 check_port "LuCI" "3500"
 check_port "dnsmasq" "53"
 check_port "dnsmasq (DHCP)" "67"
