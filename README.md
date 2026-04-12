@@ -12,7 +12,7 @@
 |------|------|
 | **MgrServer** | 路由器管理后台 (Koa + React)，端口 `:80` |
 | **LuCI** | OpenWrt 原生管理界面，端口 `:3500` |
-| **Node.js 20.x** | MgrServer 运行时 (nxhack feeds) |
+| **Node.js 20.x** | MgrServer 运行时 |
 | **Python3** | 25 个子包，脚本与工具链 |
 | **sing-box** | 代理加速引擎 |
 | **easytier** + luci-app-easytier | P2P 组网 + LuCI 插件 (预编译 IPK) |

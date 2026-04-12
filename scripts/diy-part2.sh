@@ -143,23 +143,51 @@ else
 fi
 
 # ============================================================
-# Node.js version selection (nxhack feeds)
-# Use Node.js 20.x for stability
+# Node.js version selection
+# Use Node.js 20.x for stability - Force override
 # ============================================================
 echo "Configuring Node.js version..."
 
-# 使用 Node.js 20.x (最稳定)
-echo "CONFIG_NODEJS_20=y" >> .config
+# 清理之前可能下载的 Node.js 24 源码（强制重新下载正确版本）
+echo "  Cleaning old Node.js downloads..."
+rm -rf dl/node-24.* 2>/dev/null || true
+rm -rf dl/node-v24.* 2>/dev/null || true
+rm -rf build_dir/target-*/node-v24.* 2>/dev/null || true
 
-# 禁用其他版本
-sed -i '/^CONFIG_NODEJS_24=/d' .config
-sed -i '/^CONFIG_PACKAGE_node-24=/d' .config
+# 清理所有 Node.js 相关配置
+echo "  Cleaning Node.js configuration..."
+sed -i '/^CONFIG_NODEJS_/d' .config
+sed -i '/^CONFIG_PACKAGE_node/d' .config
+
+# 强制使用 Node.js 20.x
+echo "  Setting Node.js 20.x..."
+echo "CONFIG_NODEJS_20=y" >> .config
+echo "CONFIG_PACKAGE_node=y" >> .config
 
 # 确保使用 small ICU (节省空间)
 echo "CONFIG_NODEJS_ICU_SMALL=y" >> .config
 
+# 禁用其他版本 (确保不被选中)
+echo "# CONFIG_NODEJS_24 is not set" >> .config
+
 # 重新生成配置
+echo "  Running make defconfig..."
 make defconfig
+
+# 验证配置
+echo "  Verifying Node.js configuration..."
+if grep -q "CONFIG_NODEJS_20=y" .config; then
+    echo "  ✓ Node.js 20.x configured"
+else
+    echo "  ✗ ERROR: Node.js 20.x not configured!"
+    grep "CONFIG_NODEJS" .config | head -5
+    exit 1
+fi
+
+if grep -q "CONFIG_NODEJS_24=y" .config; then
+    echo "  ✗ WARNING: Node.js 24.x still enabled!"
+    grep "CONFIG_NODEJS" .config
+fi
 
 echo "Node.js 20.x configuration complete"
 

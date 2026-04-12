@@ -3,6 +3,3 @@ src-git packages https://github.com/immortalwrt/packages.git
 src-git luci https://github.com/immortalwrt/luci.git
 src-git routing https://github.com/openwrt/routing.git
 src-git telephony https://github.com/openwrt/telephony.git
-
-# nxhack Node.js packages (with GCC 15/16 compatibility fixes)
-src-git node https://github.com/nxhack/openwrt-node-packages.git
