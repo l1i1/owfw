@@ -144,16 +144,16 @@ fi
 
 # ============================================================
 # Node.js version selection (nxhack feeds)
-# Use Node.js 24.x with GCC 15/16 compatibility fixes
+# Use Node.js 20.x for stability
 # ============================================================
 echo "Configuring Node.js version..."
 
-# 使用 Node.js 24.x (nxhack feeds 已包含 GCC 15/16 修复)
-echo "CONFIG_NODEJS_24=y" >> .config
+# 使用 Node.js 20.x (最稳定)
+echo "CONFIG_NODEJS_20=y" >> .config
 
-# 禁用旧版本
-sed -i '/^CONFIG_NODEJS_20=/d' .config
-sed -i '/^CONFIG_PACKAGE_node-20=/d' .config
+# 禁用其他版本
+sed -i '/^CONFIG_NODEJS_24=/d' .config
+sed -i '/^CONFIG_PACKAGE_node-24=/d' .config
 
 # 确保使用 small ICU (节省空间)
 echo "CONFIG_NODEJS_ICU_SMALL=y" >> .config
@@ -161,6 +161,6 @@ echo "CONFIG_NODEJS_ICU_SMALL=y" >> .config
 # 重新生成配置
 make defconfig
 
-echo "Node.js 24.x configuration complete"
+echo "Node.js 20.x configuration complete"
 
 echo "DIY Part 2: Done"

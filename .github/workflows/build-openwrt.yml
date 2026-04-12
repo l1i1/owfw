@@ -453,7 +453,7 @@ jobs:
         echo "" >> release.txt
         echo "### 已包含" >> release.txt
         echo "- MgrServer (路由器管理后台, 端口 80)" >> release.txt
-        echo "- Node.js 24.x + npm (nxhack feeds, GCC 15/16 兼容)" >> release.txt
+        echo "- Node.js 20.x + npm (nxhack feeds)" >> release.txt
         echo "- Python3 (25 子包)" >> release.txt
         echo "- sing-box (预编译 IPK)" >> release.txt
         echo "- easytier v2.5.0 + luci-app-easytier (预编译 IPK)" >> release.txt
