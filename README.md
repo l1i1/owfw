@@ -1,6 +1,6 @@
 # 京东云亚瑟 AX1800 Pro OpenWrt 固件 (含 MgrServer)
 
-基于 [ImmortalWrt](https://github.com/immortalwrt/immortalwrt) (master 分支) 自动编译的定制固件，内置 MgrServer 路由器管理后台。
+基于 [ImmortalWrt](https://github.com/immortalwrt/immortalwrt) (openwrt-24.10 分支) 自动编译的定制固件，内置 MgrServer 路由器管理后台。
 
 **目标设备:** JDCloud RE-SS-01 (Qualcomm IPQ60xx)
 
@@ -12,7 +12,7 @@
 |------|------|
 | **MgrServer** | 路由器管理后台 (Koa + React)，端口 `:80` |
 | **LuCI** | OpenWrt 原生管理界面，端口 `:3500` |
-| **Node.js 20.x** | MgrServer 运行时 |
+| **Node.js 24.x** | MgrServer 运行时 (nxhack feeds, GCC 15/16 兼容) |
 | **Python3** | 25 个子包，脚本与工具链 |
 | **sing-box** | 代理加速引擎 |
 | **easytier** + luci-app-easytier | P2P 组网 + LuCI 插件 (预编译 IPK) |
