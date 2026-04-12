@@ -99,43 +99,44 @@ fi
 
 # ============================================================
 # Add factory.bin for JDCloud RE-SS-01 (eMMC device)
-# Note: openwrt-24.10 may already have factory.bin support
+# Reference: https://github.com/VIKINGYFY/immortalwrt/blob/master/target/linux/qualcommax/image/ipq60xx.mk
+# U-Boot supports both factory.bin and sysupgrade.bin formats
 # ============================================================
-echo "Checking factory.bin support for JDCloud RE-SS-01..."
+echo "Adding factory.bin generation for JDCloud RE-SS-01..."
 IPQ60XX_MK="target/linux/qualcommax/image/ipq60xx.mk"
 if [ -f "$IPQ60XX_MK" ]; then
-    # Check if device exists
-    if grep -q "define Device/jdcloud_re-ss-01" "$IPQ60XX_MK"; then
-        # Check if factory.bin is already defined
-        if grep -A 20 "define Device/jdcloud_re-ss-01" "$IPQ60XX_MK" | grep -q "IMAGE/factory.bin"; then
-            echo "  factory.bin already defined, skipping"
+    # Check if factory.bin is already defined for jdcloud_re-ss-01
+    if ! grep -A 15 "define Device/jdcloud_re-ss-01" "$IPQ60XX_MK" | grep -q "IMAGE/factory.bin"; then
+        # Use awk to insert factory.bin definition before endef in jdcloud_re-ss-01 block
+        # Must add: $(call Device/EmmcImage) and IMAGE/factory.bin definition
+        # Note: Use \x24 to represent $ in awk to avoid shell expansion
+        awk '
+        /^define Device\/jdcloud_re-ss-01/ { in_block=1 }
+        in_block && /^\tDEVICE_PACKAGES/ {
+            print
+            print "\t\x24(call Device/EmmcImage)"
+            next
+        }
+        in_block && /^endef/ {
+            print "\tIMAGE/factory.bin := append-kernel | pad-to \x24\x24(KERNEL_SIZE) | append-rootfs | append-metadata"
+            in_block=0
+        }
+        { print }
+        ' "$IPQ60XX_MK" > "$IPQ60XX_MK.tmp" && mv "$IPQ60XX_MK.tmp" "$IPQ60XX_MK"
+        
+        # Verify the patch was applied correctly
+        if grep -A 15 "define Device/jdcloud_re-ss-01" "$IPQ60XX_MK" | grep -q "IMAGE/factory.bin"; then
+            echo "  ✓ factory.bin generation added to jdcloud_re-ss-01"
+            echo "  Verifying patch..."
+            grep -A 15 "define Device/jdcloud_re-ss-01" "$IPQ60XX_MK"
         else
-            echo "  Attempting to add factory.bin support..."
-            # Try to add factory.bin using awk
-            awk '
-            /^define Device\/jdcloud_re-ss-01/ { in_block=1 }
-            in_block && /^endef/ {
-                print "\t$(call Device/EmmcImage)"
-                print "\tIMAGE/factory.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-rootfs | append-metadata"
-                in_block=0
-            }
-            { print }
-            ' "$IPQ60XX_MK" > "$IPQ60XX_MK.tmp" 2>/dev/null
-            
-            if [ $? -eq 0 ] && [ -f "$IPQ60XX_MK.tmp" ]; then
-                mv "$IPQ60XX_MK.tmp" "$IPQ60XX_MK"
-                if grep -A 20 "define Device/jdcloud_re-ss-01" "$IPQ60XX_MK" | grep -q "IMAGE/factory.bin"; then
-                    echo "  ✓ factory.bin generation added to jdcloud_re-ss-01"
-                else
-                    echo "  ⚠ factory.bin patch may have failed, but continuing..."
-                fi
-            else
-                echo "  ⚠ Could not patch factory.bin, but continuing build..."
-                rm -f "$IPQ60XX_MK.tmp"
-            fi
+            echo "  ✗ ERROR: factory.bin patch failed!"
+            echo "  Current definition:"
+            grep -A 15 "define Device/jdcloud_re-ss-01" "$IPQ60XX_MK"
+            exit 1
         fi
     else
-        echo "  WARNING: jdcloud_re-ss-01 device not found in $IPQ60XX_MK"
+        echo "  factory.bin already defined, skipping"
     fi
 else
     echo "  WARNING: $IPQ60XX_MK not found"
