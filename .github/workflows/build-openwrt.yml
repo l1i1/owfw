@@ -34,7 +34,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-
+    timeout-minutes: 600  # 10 小时超时（OpenWrt 编译需要较长时间）
+    
     steps:
     - name: Check Server Performance
       run: |
@@ -58,6 +59,15 @@ jobs:
 
     - name: Checkout
       uses: actions/checkout@v4
+
+    # 配置 ccache 缓存以加速编译
+    - name: Setup ccache cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: ${{ runner.os }}-openwrt-ccache-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-ccache-
 
     # ================================================================
     # MgrServer: build and stage into files overlay
@@ -303,6 +313,14 @@ jobs:
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
+        
+        # 配置 ccache 加速编译
+        echo "Configuring ccache..."
+        ccache --max-size=15G
+        ccache -z
+        echo "CCACHE_DIR=\$HOME/.ccache" >> $GITHUB_ENV
+        echo "USE_CCACHE=1" >> $GITHUB_ENV
+        echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
 
     - name: Clone source code
       working-directory: /workdir
