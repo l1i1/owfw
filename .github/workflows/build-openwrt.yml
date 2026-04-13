@@ -392,7 +392,7 @@ jobs:
         require_config "CONFIG_PACKAGE_luci-compat=y"
         require_config "CONFIG_PACKAGE_parted=y"
         require_config "CONFIG_PACKAGE_hostapd-utils=y"
-        require_config "CONFIG_PACKAGE_miniupnpd=y"
+        require_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
 
     - name: Compile the firmware
       id: compile
@@ -513,7 +513,7 @@ jobs:
         require_build_config "CONFIG_PACKAGE_luci-compat=y"
         require_build_config "CONFIG_PACKAGE_parted=y"
         require_build_config "CONFIG_PACKAGE_hostapd-utils=y"
-        require_build_config "CONFIG_PACKAGE_miniupnpd=y"
+        require_build_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
 
         require_manifest_pkg "node127"
         require_manifest_pkg "node-npm"
@@ -525,7 +525,7 @@ jobs:
         require_manifest_pkg "luci-compat"
         require_manifest_pkg "parted"
         require_manifest_pkg "hostapd-utils"
-        require_manifest_pkg "miniupnpd"
+        require_manifest_pkg "miniupnpd-nftables"
         require_manifest_pkg "wimlib"
 
         if grep -q '^kmod-qca-nss-dp - ' "$MANIFEST"; then
