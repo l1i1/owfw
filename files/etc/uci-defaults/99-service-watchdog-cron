@@ -3,9 +3,21 @@
 # Runs every 5 minutes to check service health
 
 # Add cron job for service watchdog
-(crontab -l 2>/dev/null | grep -v "service-watchdog"; echo "*/5 * * * * /usr/bin/service-watchdog") | crontab -
+if command -v crontab >/dev/null 2>&1; then
+  (crontab -l 2>/dev/null | grep -v "service-watchdog"; echo "*/5 * * * * /usr/bin/service-watchdog") | crontab -
+else
+  mkdir -p /etc/crontabs
+  touch /etc/crontabs/root
+  grep -v "service-watchdog" /etc/crontabs/root > /tmp/mgrserver-cron.$$ 2>/dev/null || true
+  echo "*/5 * * * * /usr/bin/service-watchdog" >> /tmp/mgrserver-cron.$$
+  mv /tmp/mgrserver-cron.$$ /etc/crontabs/root
+fi
 
 # Restart cron
-/etc/init.d/cron restart
+if [ -x /etc/init.d/cron ]; then
+  /etc/init.d/cron restart >/dev/null 2>&1 || /etc/init.d/cron reload >/dev/null 2>&1 || true
+elif command -v crond >/dev/null 2>&1; then
+  killall -HUP crond >/dev/null 2>&1 || crond -c /etc/crontabs >/dev/null 2>&1 || true
+fi
 
 exit 0

@@ -34,31 +34,14 @@ else
 fi
 
 # ============================================================
-# NSS hardware acceleration CONFIG flags
-# Only inject if NSS driver is enabled but flags are missing
+# Report source-tree acceleration support
+# The current source tree exposes qca-nss-dp, but not the full qca-nss-drv stack.
 # ============================================================
-echo "Checking NSS hardware acceleration flags..."
-if grep -q 'CONFIG_PACKAGE_kmod-qca-nss-drv=y' .config 2>/dev/null; then
-    if ! grep -q 'CONFIG_NSS_DRV=y' .config 2>/dev/null; then
-        echo "  Injecting NSS CONFIG flags..."
-        sed -i '/CONFIG_NSS_DRV/d' .config
-        sed -i '/CONFIG_NSS_MEM_PROFILE/d' .config
-        cat >> .config <<'NSEOF'
-CONFIG_NSS_DRV=y
-CONFIG_NSS_DRV_BRIDGE_ENABLE=y
-CONFIG_NSS_DRV_VLAN_ENABLE=y
-CONFIG_NSS_DRV_GRE_ENABLE=y
-CONFIG_NSS_DRV_IPV6_ENABLE=y
-CONFIG_NSS_DRV_PPPOE_ENABLE=y
-CONFIG_NSS_DRV_SHAPER_ENABLE=y
-CONFIG_NSS_MEM_PROFILE_MEDIUM=y
-NSEOF
-        echo "  NSS flags written to .config"
-    else
-        echo "  NSS flags already present in .config, skipping injection"
-    fi
+echo "Checking source-tree acceleration support..."
+if [ -f "package/kernel/qca-nss-dp/Makefile" ]; then
+    echo "  qca-nss-dp package detected in source tree"
 else
-    echo "  NSS driver not in .config, skipping NSS flags"
+    echo "  WARNING: qca-nss-dp package not found in source tree"
 fi
 
 # ============================================================
@@ -91,8 +74,8 @@ if [ -d "$GITHUB_WORKSPACE/files" ]; then
     fi
 
     # Report PXE resources size if present
-    if [ -d "$GITHUB_WORKSPACE/files/home/pxe" ]; then
-        PXE_SIZE=$(du -sh "$GITHUB_WORKSPACE/files/home/pxe" | awk '{print $1}')
+    if [ -d "$GITHUB_WORKSPACE/files/usr/share/mgrserver-defaults/pxe" ]; then
+        PXE_SIZE=$(du -sh "$GITHUB_WORKSPACE/files/usr/share/mgrserver-defaults/pxe" | awk '{print $1}')
         echo "  PXE resources size: $PXE_SIZE"
     fi
 fi
@@ -160,12 +143,16 @@ rm -rf build_dir/target-*/node-v24.* 2>/dev/null || true
 # 清理所有 Node.js 相关配置
 echo "  Cleaning Node.js configuration..."
 sed -i '/^CONFIG_NODEJS_/d' .config
-sed -i '/^CONFIG_PACKAGE_node/d' .config
+sed -i '/^CONFIG_PACKAGE_node=y$/d' .config
+sed -i '/^# CONFIG_PACKAGE_node is not set$/d' .config
+sed -i '/^CONFIG_PACKAGE_node-npm=y$/d' .config
+sed -i '/^# CONFIG_PACKAGE_node-npm is not set$/d' .config
 
 # 强制使用 Node.js 22.x
 echo "  Setting Node.js 22.x..."
 echo "CONFIG_NODEJS_22=y" >> .config
 echo "CONFIG_PACKAGE_node=y" >> .config
+echo "CONFIG_PACKAGE_node-npm=y" >> .config
 
 # 确保使用 small ICU (节省空间)
 echo "CONFIG_NODEJS_ICU_SMALL=y" >> .config
@@ -186,6 +173,14 @@ if grep -q "CONFIG_NODEJS_22=y" .config; then
 else
     echo "  ✗ ERROR: Node.js 22.x not configured!"
     grep "CONFIG_NODEJS" .config | head -5
+    exit 1
+fi
+
+if grep -q "CONFIG_PACKAGE_node-npm=y" .config; then
+    echo "  ✓ node-npm configured"
+else
+    echo "  ✗ ERROR: node-npm not configured!"
+    grep "CONFIG_PACKAGE_node" .config
     exit 1
 fi
 

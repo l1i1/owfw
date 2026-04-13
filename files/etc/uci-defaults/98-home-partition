@@ -9,13 +9,41 @@ DISK='/dev/mmcblk0'
 PART='/dev/mmcblk0p22'
 LEGACY_PART='/dev/mmcblk0p21'
 TARGET='/home'
+PXE_DEFAULTS='/usr/share/mgrserver-defaults/pxe'
+PXE_TARGET='/home/pxe'
 CREATED_PART='0'
+HOME_ON_OVERLAY='0'
+
+cleanup() {
+    rm -f "$0"
+}
+
+sync_pxe_defaults() {
+    [ -d "$PXE_DEFAULTS" ] || return 0
+
+    mkdir -p "$PXE_TARGET"
+
+    if [ -f "$PXE_TARGET/config.ini" ] && [ -f "$PXE_TARGET/up_pxe_res.sh" ] && [ -d "$PXE_TARGET/tftpboot" ]; then
+        echo "PXE defaults already present: $PXE_TARGET"
+        return 0
+    fi
+
+    cp -a "$PXE_DEFAULTS"/. "$PXE_TARGET"/ 2>/dev/null \
+        || { echo "Failed to seed PXE defaults from $PXE_DEFAULTS"; return 1; }
+
+    echo "PXE defaults restored: $PXE_DEFAULTS -> $PXE_TARGET"
+    return 0
+}
 
 # 仅在 eMMC 设备存在时执行
-[ -b "$DISK" ] || { echo "Disk device not found: $DISK, skip /home setup"; rm -f "$0"; exit 0; }
+if [ ! -b "$DISK" ]; then
+    echo "Disk device not found: $DISK, falling back to overlay /home"
+    mkdir -p "$TARGET"
+    HOME_ON_OVERLAY='1'
+fi
 
 # 优先使用专用数据分区 p22，回退到 p21（如果 >4GB）
-if [ ! -b "$PART" ] && [ -b "$LEGACY_PART" ]; then
+if [ "$HOME_ON_OVERLAY" != '1' ] && [ ! -b "$PART" ] && [ -b "$LEGACY_PART" ]; then
     LEGACY_SIZE_SECTORS=$(awk '$4 ~ /mmcblk0p21$/ {print $3}' /proc/partitions 2>/dev/null | tail -n1)
     LEGACY_SIZE_MIB=$((LEGACY_SIZE_SECTORS / 2048))
     if [ -n "$LEGACY_SIZE_SECTORS" ] && [ "$LEGACY_SIZE_MIB" -gt 4096 ]; then
@@ -24,7 +52,7 @@ if [ ! -b "$PART" ] && [ -b "$LEGACY_PART" ]; then
 fi
 
 # 如果分区不存在，创建它
-if [ ! -b "$PART" ]; then
+if [ "$HOME_ON_OVERLAY" != '1' ] && [ ! -b "$PART" ]; then
     echo "Partition not found, creating: $PART"
     # 仅使用 parted，避免 fdisk 分区号自动选择的歧义
     if command -v parted >/dev/null 2>&1; then
@@ -32,39 +60,60 @@ if [ ! -b "$PART" ]; then
             | awk -F: '$1 ~ /^[0-9]+$/ {gsub("MiB", "", $3); end=$3} END {if (end == "") print ""; else printf "%d", int(end) + 1}')
         [ -n "$PART_START_MIB" ] || PART_START_MIB='1'
         parted -s "$DISK" mkpart primary ext4 "${PART_START_MIB}MiB" 100% \
-            || { echo "parted failed"; rm -f "$0"; exit 0; }
+            || { echo "parted failed, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
     else
-        echo 'parted not available, cannot create partition.'
-        rm -f "$0"
-        exit 0
+        echo 'parted not available, falling back to overlay /home.'
+        mkdir -p "$TARGET"
+        HOME_ON_OVERLAY='1'
     fi
-    command -v partprobe >/dev/null 2>&1 && partprobe "$DISK" || true
-    sleep 2
-    CREATED_PART='1'
+    if [ "$HOME_ON_OVERLAY" != '1' ]; then
+        command -v partprobe >/dev/null 2>&1 && partprobe "$DISK" || true
+        sleep 2
+        CREATED_PART='1'
+    fi
 fi
 
 # 等待设备节点出现（parted 创建后可能需要时间刷新）
-if [ ! -b "$PART" ]; then
+if [ "$HOME_ON_OVERLAY" != '1' ] && [ ! -b "$PART" ]; then
     mdev -s >/dev/null 2>&1 || true
     sleep 2
     # 再次检查是否出现（解决 parted 后立即检测失败的问题）
-    [ -b "$PART" ] || { echo "Partition node not appeared after creation: $PART"; rm -f "$0"; exit 0; }
+    [ -b "$PART" ] || {
+        echo "Partition node not appeared after creation: $PART, falling back to overlay /home"
+        mkdir -p "$TARGET"
+        HOME_ON_OVERLAY='1'
+    }
 fi
 
 # 格式化（新分区或无文件系统时）
-command -v blkid >/dev/null 2>&1 || { echo 'blkid not found'; rm -f "$0"; exit 0; }
-PART_FSTYPE=$(blkid -s TYPE -o value "$PART" 2>/dev/null || true)
-if [ "$CREATED_PART" = '1' ] || [ -z "$PART_FSTYPE" ]; then
-    command -v mkfs.ext4 >/dev/null 2>&1 || { echo 'mkfs.ext4 not found'; rm -f "$0"; exit 0; }
+PART_FSTYPE='overlay'
+if [ "$HOME_ON_OVERLAY" != '1' ]; then
+    command -v blkid >/dev/null 2>&1 || {
+        echo 'blkid not found, falling back to overlay /home'
+        mkdir -p "$TARGET"
+        HOME_ON_OVERLAY='1'
+    }
+fi
+if [ "$HOME_ON_OVERLAY" != '1' ]; then
+    PART_FSTYPE=$(blkid -s TYPE -o value "$PART" 2>/dev/null || true)
+    if [ "$CREATED_PART" = '1' ] || [ -z "$PART_FSTYPE" ]; then
+        command -v mkfs.ext4 >/dev/null 2>&1 || {
+            echo 'mkfs.ext4 not found, falling back to overlay /home'
+            mkdir -p "$TARGET"
+            HOME_ON_OVERLAY='1'
+        }
+    fi
+fi
+if [ "$HOME_ON_OVERLAY" != '1' ] && { [ "$CREATED_PART" = '1' ] || [ -z "$PART_FSTYPE" ]; }; then
     mkfs.ext4 -F "$PART" >/dev/null \
-        || { echo "mkfs.ext4 failed on $PART"; rm -f "$0"; exit 0; }
+        || { echo "mkfs.ext4 failed on $PART, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
     PART_FSTYPE='ext4'
 fi
 
 # 挂载
 mkdir -p "$TARGET"
 SKIP_MOUNT='0'
-if mountpoint -q "$TARGET"; then
+if [ "$HOME_ON_OVERLAY" != '1' ] && mountpoint -q "$TARGET"; then
     CURR_SRC=$(awk '$2 == "/home" {print $1}' /proc/mounts | tail -n1)
     if [ "$CURR_SRC" = "$PART" ]; then
         SKIP_MOUNT='1'
@@ -72,26 +121,35 @@ if mountpoint -q "$TARGET"; then
         umount "$TARGET" || true
     fi
 fi
-if [ "$SKIP_MOUNT" != '1' ]; then
+if [ "$HOME_ON_OVERLAY" != '1' ] && [ "$SKIP_MOUNT" != '1' ]; then
     mount "$PART" "$TARGET" 2>/dev/null \
         || mount -t "$PART_FSTYPE" "$PART" "$TARGET" \
-        || { echo "mount failed"; rm -f "$0"; exit 0; }
+        || { echo "mount failed, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
 fi
 
 # 写入 fstab 持久化（使用双引号使变量正确展开）
-[ -f /etc/config/fstab ] || touch /etc/config/fstab
-uci -q delete fstab.mgrhome || true
-uci set fstab.mgrhome='mount'
-uci set fstab.mgrhome.target="$TARGET"
-uci set fstab.mgrhome.device="$PART"
-uci set fstab.mgrhome.fstype="$PART_FSTYPE"
-uci set fstab.mgrhome.options='rw,sync'
-uci set fstab.mgrhome.enabled='1'
-uci set fstab.mgrhome.enabled_fsck='0'
-uci commit fstab
-/etc/init.d/fstab enable >/dev/null 2>&1 || true
+if [ "$HOME_ON_OVERLAY" != '1' ]; then
+    [ -f /etc/config/fstab ] || touch /etc/config/fstab
+    uci -q delete fstab.mgrhome || true
+    uci set fstab.mgrhome='mount'
+    uci set fstab.mgrhome.target="$TARGET"
+    uci set fstab.mgrhome.device="$PART"
+    uci set fstab.mgrhome.fstype="$PART_FSTYPE"
+    uci set fstab.mgrhome.options='rw,sync'
+    uci set fstab.mgrhome.enabled='1'
+    uci set fstab.mgrhome.enabled_fsck='0'
+    uci commit fstab
+    /etc/init.d/fstab enable >/dev/null 2>&1 || true
+fi
+
+sync_pxe_defaults || true
+
+if [ "$HOME_ON_OVERLAY" = '1' ]; then
+    echo "/home fallback ready on overlay: $TARGET (will retry partition setup on next boot)"
+    exit 1
+fi
 
 echo "/home partition ready: $PART -> $TARGET ($PART_FSTYPE)"
 
-rm -f "$0"
+cleanup
 exit 0

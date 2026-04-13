@@ -1,6 +1,6 @@
 # 京东云亚瑟 AX1800 Pro OpenWrt 固件 (含 MgrServer)
 
-基于 [ImmortalWrt](https://github.com/immortalwrt/immortalwrt) (openwrt-24.10 分支) 自动编译的定制固件，内置 MgrServer 路由器管理后台。
+基于 [l1i1/immortalwrt](https://github.com/l1i1/immortalwrt) `master` 自动编译的定制固件，内置 MgrServer 路由器管理后台。
 
 **目标设备:** JDCloud RE-SS-01 (Qualcomm IPQ60xx)
 
@@ -12,10 +12,10 @@
 |------|------|
 | **MgrServer** | 路由器管理后台 (Koa + React)，端口 `:80` |
 | **LuCI** | OpenWrt 原生管理界面，端口 `:3500` |
-| **Node.js 22.x** | MgrServer 运行时 |
+| **Node.js 22.x + npm** | MgrServer 运行时 |
 | **Python3** | 25 个子包，脚本与工具链 |
-| **sing-box** | 代理加速引擎 |
-| **easytier** + luci-app-easytier | P2P 组网 + LuCI 插件 (预编译 IPK) |
+| **sing-box** | 代理加速引擎（预编译 IPK，运行依赖已内置） |
+| **easytier** + luci-app-easytier | P2P 组网 + LuCI 插件（预编译 IPK，运行依赖已内置） |
 
 ### 网络核心
 
@@ -32,11 +32,8 @@
 
 | 组件 | 说明 |
 |------|------|
-| **NSS 驱动** | `kmod-qca-nss-drv` — 高通硬件转发 |
-| **NSS ECM** | `kmod-qca-nss-ecm` — 连接管理 |
-| **NSS Crypto** | `kmod-qca-nss-crypto` — 硬件加密 |
-| **NSS Clients** | `kmod-qca-nss-clients` — 客户端支持 |
-| **NSS IFB** | `kmod-nss-ifb` — 接口绑定 |
+| **qca-nss-dp** | qualcommax 目标默认数据通路加速 |
+| **nft offload** | `kmod-nft-offload` — 软件/硬件转发加速 |
 | **eBPF** | 内核 BPF syscall + JIT (基础支持) |
 
 ### 无线中继 / Mesh
@@ -84,7 +81,7 @@
 
 ### 编译优化
 
-- **EasyTier + luci-app-easytier**: 编译时直接提取 [官方预编译 IPK](https://github.com/EasyTier/luci-app-easytier/releases) 到 `files/`，无需首次启动安装，LuCI 插件也已内置
+- **EasyTier + luci-app-easytier**: 编译时直接提取 [官方预编译 IPK](https://github.com/EasyTier/luci-app-easytier/releases) 到 `files/`，并校验 `kmod-tun` / `luci-compat` 等运行依赖
 - **MgrServer**: 在 CI 中预编译后以文件形式注入固件，不占用 OpenWrt 编译时间
 
 ### 其他工作流
@@ -159,7 +156,7 @@ uci commit mgrserver
 │   └── jdc-ax1800pro.config     # 设备 .config (含所有包选择)
 ├── scripts/
 │   ├── diy-part1.sh             # Feed 源配置
-│   └── diy-part2.sh             # 编译前定制 (主机名/时区/NSS 标志/权限)
+│   └── diy-part2.sh             # 编译前定制 (主机名/时区/Node.js 版本/权限)
 ├── files/
 │   └── etc/
 │       ├── banner               # 登录横幅
@@ -185,9 +182,9 @@ uci commit mgrserver
 - 内置 Node.js + MgrServer 增加约 40-60MB
 - 如需精简，可在 workflow 中移除 MgrServer 构建步骤
 
-### NSS 硬件加速
-- NSS CONFIG 标志通过 `scripts/diy-part2.sh` 条件注入 `.config`
-- 需确保 `kmod-qca-nss-drv=y` 在 `.config` 中启用
+### 硬件加速
+- 当前源码树可验证的加速能力为 `qca-nss-dp` 与 `kmod-nft-offload`
+- 不再声明未出现在源码树/产物中的 `qca-nss-drv/ecm/crypto/clients/ifb` 全栈特性
 
 ### eBPF
 - 仅启用内核 BPF syscall/JIT 支持
@@ -201,8 +198,8 @@ uci commit mgrserver
 - 如镜像不可用，手动编辑 `/etc/opkg/distfeeds.conf`
 
 ### 预编译 IPK
-- EasyTier + luci-app-easytier 在编译时直接提取到 `files/` overlay，固件启动后即完整可用（无需首次启动安装）
-- sing-box 同样在编译时提取，不占用 OpenWrt 编译时间
+- EasyTier + luci-app-easytier 在编译时直接提取到 `files/` overlay，并由 workflow 校验运行依赖是否进入最终固件
+- sing-box 同样在编译时提取，且 workflow 会校验 `kmod-tun` / `kmod-inet-diag` / `kmod-nft-queue` 等运行依赖
 
 ## 🙏 致谢
 

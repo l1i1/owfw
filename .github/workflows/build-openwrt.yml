@@ -20,6 +20,7 @@ on:
 env:
   REPO_URL: https://github.com/l1i1/immortalwrt
   REPO_BRANCH: master
+  REPO_DISPLAY_NAME: l1i1/immortalwrt
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: configs/jdc-ax1800pro.config
   DIY_P1_SH: scripts/diy-part1.sh
@@ -132,13 +133,14 @@ jobs:
         du -sh "$MGR_DEST"
 
     # ================================================================
-    # PXE resources: stage into files/home/pxe/
+    # PXE resources: stage into a rootfs-safe defaults directory.
+    # The first-boot /home mount script will copy these defaults into /home/pxe.
     # ================================================================
     - name: Stage PXE resources
       run: |
         PXE_SRC="$GITHUB_WORKSPACE/mgrserver-src/pxe-server"
         if [ -d "$PXE_SRC/pxe" ]; then
-          PXE_DEST="$GITHUB_WORKSPACE/files/home/pxe"
+          PXE_DEST="$GITHUB_WORKSPACE/files/usr/share/mgrserver-defaults/pxe"
           echo "Staging PXE resources from $PXE_SRC/pxe -> $PXE_DEST"
           mkdir -p "$PXE_DEST"
           cp -r "$PXE_SRC/pxe/"* "$PXE_DEST/"
@@ -366,6 +368,32 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
+    - name: Validate package selection before compile
+      run: |
+        cd openwrt
+
+        require_config() {
+          local pattern="$1"
+          if grep -qx "$pattern" .config; then
+            echo "✓ $pattern"
+          else
+            echo "✗ Missing required config: $pattern"
+            exit 1
+          fi
+        }
+
+        require_config "CONFIG_NODEJS_22=y"
+        require_config "CONFIG_PACKAGE_node=y"
+        require_config "CONFIG_PACKAGE_node-npm=y"
+        require_config "CONFIG_PACKAGE_python3=y"
+        require_config "CONFIG_PACKAGE_kmod-tun=y"
+        require_config "CONFIG_PACKAGE_kmod-inet-diag=y"
+        require_config "CONFIG_PACKAGE_kmod-nft-queue=y"
+        require_config "CONFIG_PACKAGE_luci-compat=y"
+        require_config "CONFIG_PACKAGE_parted=y"
+        require_config "CONFIG_PACKAGE_hostapd-utils=y"
+        require_config "CONFIG_PACKAGE_miniupnpd=y"
+
     - name: Compile the firmware
       id: compile
       run: |
@@ -443,6 +471,155 @@ jobs:
         else
           echo "⚠ WARNING: initramfs not found"
         fi
+
+        MANIFEST=$(find . -name "*.manifest" | head -1)
+        CONFIG_BUILDINFO=$(find . -name "config.buildinfo" | head -1)
+        PROFILES_JSON=$(find . -name "profiles.json" | head -1)
+
+        for file in "$MANIFEST" "$CONFIG_BUILDINFO" "$PROFILES_JSON"; do
+          if [ -z "$file" ] || [ ! -f "$file" ]; then
+            echo "✗ ERROR: required metadata file missing"
+            exit 1
+          fi
+        done
+
+        require_build_config() {
+          local pattern="$1"
+          if grep -qx "$pattern" "$CONFIG_BUILDINFO"; then
+            echo "✓ build config present: $pattern"
+          else
+            echo "✗ Missing build config: $pattern"
+            exit 1
+          fi
+        }
+
+        require_manifest_pkg() {
+          local pkg="$1"
+          if grep -q "^${pkg} - " "$MANIFEST"; then
+            echo "✓ manifest package present: $pkg"
+          else
+            echo "✗ Missing manifest package: $pkg"
+            exit 1
+          fi
+        }
+
+        require_build_config "CONFIG_NODEJS_22=y"
+        require_build_config "CONFIG_PACKAGE_node=y"
+        require_build_config "CONFIG_PACKAGE_node-npm=y"
+        require_build_config "CONFIG_PACKAGE_python3=y"
+        require_build_config "CONFIG_PACKAGE_kmod-tun=y"
+        require_build_config "CONFIG_PACKAGE_kmod-inet-diag=y"
+        require_build_config "CONFIG_PACKAGE_kmod-nft-queue=y"
+        require_build_config "CONFIG_PACKAGE_luci-compat=y"
+        require_build_config "CONFIG_PACKAGE_parted=y"
+        require_build_config "CONFIG_PACKAGE_hostapd-utils=y"
+        require_build_config "CONFIG_PACKAGE_miniupnpd=y"
+
+        require_manifest_pkg "node127"
+        require_manifest_pkg "node-npm"
+        require_manifest_pkg "python3"
+        require_manifest_pkg "luci"
+        require_manifest_pkg "kmod-tun"
+        require_manifest_pkg "kmod-inet-diag"
+        require_manifest_pkg "kmod-nft-queue"
+        require_manifest_pkg "luci-compat"
+        require_manifest_pkg "parted"
+        require_manifest_pkg "hostapd-utils"
+        require_manifest_pkg "miniupnpd"
+        require_manifest_pkg "wimlib"
+
+        if grep -q '^kmod-qca-nss-dp - ' "$MANIFEST"; then
+          echo "HAS_QCA_NSS_DP=true" >> $GITHUB_ENV
+          echo "✓ manifest package present: kmod-qca-nss-dp"
+        else
+          echo "HAS_QCA_NSS_DP=false" >> $GITHUB_ENV
+          echo "⚠ qca-nss-dp not present in manifest; release notes will omit acceleration claim"
+        fi
+
+        find_rootfs_stage() {
+          local candidate
+          for candidate in $(find "$GITHUB_WORKSPACE/openwrt/build_dir" -mindepth 2 -maxdepth 3 -type d \( -name "root-*" -o -name "root.*" \) 2>/dev/null); do
+            if [ -f "$candidate/etc/openwrt_release" ]; then
+              echo "$candidate"
+              return 0
+            fi
+          done
+          return 1
+        }
+
+        require_rootfs_entry() {
+          local rel="$1"
+          if [ -e "$ROOTFS_VIEW/$rel" ]; then
+            echo "✓ rootfs entry present: /$rel"
+          else
+            echo "✗ Missing rootfs entry: /$rel"
+            exit 1
+          fi
+        }
+
+        require_rootfs_any() {
+          local description="$1"
+          shift
+          local rel
+          for rel in "$@"; do
+            if [ -e "$ROOTFS_VIEW/$rel" ]; then
+              echo "✓ rootfs entry present for ${description}: /$rel"
+              return 0
+            fi
+          done
+          echo "✗ Missing rootfs entry for ${description}"
+          printf '  tried: /%s\n' "$@"
+          exit 1
+        }
+
+        ROOTFS_STAGE=$(find_rootfs_stage || true)
+        if [ -z "$ROOTFS_STAGE" ] || [ ! -d "$ROOTFS_STAGE" ]; then
+          echo "✗ ERROR: unable to locate rootfs staging directory after build"
+          exit 1
+        fi
+
+        ROOTFS_VIEW="$ROOTFS_STAGE"
+        ROOTFS_VIEW_DESC="build_dir rootfs staging"
+        ROOTFS_TMP=""
+        ROOTFS_IMAGE=$(find "$GITHUB_WORKSPACE/openwrt/bin/targets" -type f \( -name "*squashfs-rootfs*" -o -name "*rootfs.squashfs" -o -name "*rootfs.img" -o -name "*rootfs.bin" \) ! -name "*sysupgrade*" ! -name "*factory*" 2>/dev/null | head -1)
+        if [ -n "$ROOTFS_IMAGE" ] && command -v unsquashfs >/dev/null 2>&1; then
+          ROOTFS_TMP=$(mktemp -d /tmp/openwrt-rootfs-check.XXXXXX)
+          if unsquashfs -d "$ROOTFS_TMP" "$ROOTFS_IMAGE" >/dev/null 2>&1; then
+            ROOTFS_VIEW="$ROOTFS_TMP"
+            ROOTFS_VIEW_DESC="unsquashed rootfs image"
+          else
+            rm -rf "$ROOTFS_TMP"
+            ROOTFS_TMP=""
+          fi
+        fi
+
+        echo "Using rootfs verification source: $ROOTFS_VIEW_DESC -> $ROOTFS_VIEW"
+
+        require_rootfs_entry "etc/init.d/mgrserver"
+        require_rootfs_entry "usr/bin/health-check"
+        require_rootfs_entry "usr/bin/service-watchdog"
+        require_rootfs_entry "etc/uci-defaults/98-home-partition"
+        require_rootfs_entry "etc/uci-defaults/99-service-watchdog-cron"
+        require_rootfs_entry "usr/bin/sing-box"
+        require_rootfs_entry "etc/init.d/sing-box"
+        require_rootfs_entry "etc/config/sing-box"
+        require_rootfs_entry "usr/bin/easytier-core"
+        require_rootfs_entry "usr/bin/easytier-cli"
+        require_rootfs_entry "usr/bin/easytier-web"
+        require_rootfs_entry "etc/init.d/easytier"
+        require_rootfs_entry "etc/config/easytier"
+        require_rootfs_entry "usr/lib/lua/luci/controller/easytier.lua"
+        require_rootfs_entry "usr/share/rpcd/acl.d/luci-app-easytier.json"
+        require_rootfs_entry "usr/share/mgrserver-defaults/pxe/config.ini"
+        require_rootfs_entry "usr/share/mgrserver-defaults/pxe/up_pxe_res.sh"
+        require_rootfs_entry "usr/share/mgrserver-defaults/pxe/tftpboot"
+        require_rootfs_entry "root/mgrserver/commands.json"
+        require_rootfs_entry "root/mgrserver/web-dist/index.html"
+        require_rootfs_any "MgrServer server entry" "root/mgrserver/dist/index.js" "root/mgrserver/bundle/index.cjs"
+
+        if [ -n "$ROOTFS_TMP" ]; then
+          rm -rf "$ROOTFS_TMP"
+        fi
         
         echo ""
         echo "============================================"
@@ -465,7 +642,7 @@ jobs:
         echo "## 京东云亚瑟 AX1800 Pro OpenWrt 固件 (含 MgrServer)" >> release.txt
         echo "" >> release.txt
         echo "### 固件信息" >> release.txt
-        echo "- 源码: ImmortalWrt (GitHub)" >> release.txt
+        echo "- 源码: ${REPO_DISPLAY_NAME} (${REPO_BRANCH})" >> release.txt
         echo "- 设备: JDCloud RE-SS-01 (AX1800 Pro)" >> release.txt
         echo "- 编译时间: $(date +"%Y-%m-%d %H:%M")" >> release.txt
         echo "" >> release.txt
@@ -473,10 +650,14 @@ jobs:
         echo "- MgrServer (路由器管理后台, 端口 80)" >> release.txt
         echo "- Node.js 22.x + npm" >> release.txt
         echo "- Python3 (25 子包)" >> release.txt
-        echo "- sing-box (预编译 IPK)" >> release.txt
-        echo "- easytier v2.5.0 + luci-app-easytier (预编译 IPK)" >> release.txt
-        echo "- NSS 硬件加速" >> release.txt
-        echo "- PXE 启动资源 (/home/pxe)" >> release.txt
+        echo "- sing-box (预编译 IPK，已校验 kmod-tun / kmod-inet-diag / kmod-nft-queue)" >> release.txt
+        echo "- easytier v2.5.0 + luci-app-easytier (预编译 IPK，已校验 kmod-tun / luci-compat)" >> release.txt
+        if [ "${HAS_QCA_NSS_DP:-false}" = "true" ]; then
+          echo "- qca-nss-dp 数据通路加速" >> release.txt
+        fi
+        echo "- hostapd-utils（WPS PBC 所需 hostapd_cli）" >> release.txt
+        echo "- miniupnpd（UPnP 管理）" >> release.txt
+        echo "- PXE 默认资源（首启同步到 /home/pxe）" >> release.txt
         echo "- /home 分区自动挂载" >> release.txt
         echo "" >> release.txt
         echo "### 默认设置" >> release.txt

@@ -8,7 +8,8 @@ MAX_LOG_SIZE="512K"
 MAX_LOG_FILES=3
 
 # Services to monitor: name:pidfile:check_command:start_command
-SERVICES="mgrserver:/var/run/mgrserver.pid:curl -s http://127.0.0.1:80/health:/etc/init.d/mgrserver restart"
+# Delegate health verification to the init script so custom ports stay in sync.
+SERVICES="mgrserver:/var/run/mgrserver.pid:/etc/init.d/mgrserver health_check:/etc/init.d/mgrserver restart"
 
 log() {
   local level="$1"
@@ -32,29 +33,35 @@ check_service() {
   local name="$1"
   local pidfile="$2"
   local check_cmd="$3"
+  local pid_ok=0
 
   # Check if PID file exists and process is running
-  if [ -f "$pidfile" ]; then
+  if [ -n "$pidfile" ] && [ -f "$pidfile" ]; then
     local pid=$(cat "$pidfile")
-    if [ ! -d "/proc/$pid" ]; then
+    if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+      pid_ok=1
+    else
       log "warn" "$name: PID $pid not running"
-      return 1
     fi
-  else
+  elif [ -n "$pidfile" ]; then
     log "warn" "$name: PID file not found"
-    return 1
   fi
 
   # Run custom health check if provided
   if [ -n "$check_cmd" ]; then
     # Use sh -c instead of eval for safety
-    if ! sh -c "$check_cmd" >/dev/null 2>&1; then
-      log "warn" "$name: health check failed"
-      return 1
+    if sh -c "$check_cmd" >/dev/null 2>&1; then
+      return 0
     fi
+    log "warn" "$name: health check failed"
+    return 1
   fi
 
-  return 0
+  if [ "$pid_ok" = "1" ]; then
+    return 0
+  fi
+
+  return 1
 }
 
 # Restart a service
