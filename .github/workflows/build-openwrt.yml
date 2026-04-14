@@ -94,7 +94,7 @@ jobs:
 
         cd "$GITHUB_WORKSPACE/mgrserver-src"
         echo "Installing dependencies..."
-        pnpm install --frozen-lockfile || pnpm install
+        pnpm install --frozen-lockfile
 
         echo "Building MgrServer..."
         pnpm build
@@ -178,6 +178,8 @@ jobs:
         echo "Extracting prebuilt IPKs into files/ overlay"
         echo "============================================"
         mkdir -p "$GITHUB_WORKSPACE/files/usr"
+        PREBUILT_IPK_METADATA="$GITHUB_WORKSPACE/prebuilt-ipk-metadata.txt"
+        : > "$PREBUILT_IPK_METADATA"
 
         # Helper function: download with retry
         download_with_retry() {
@@ -206,6 +208,9 @@ jobs:
           local ipk_path="$1"
           local dest="$2"
           local expected_files="$3"
+          local package_name=""
+          local package_arch=""
+          local package_depends=""
           
           if [ ! -f "$ipk_path" ]; then
             echo "ERROR: IPK file not found: $ipk_path"
@@ -213,6 +218,7 @@ jobs:
           fi
           
           echo "Extracting: $(basename "$ipk_path")"
+          rm -rf /tmp/ipk-work
           mkdir -p /tmp/ipk-work
           if ! tar -xzf "$ipk_path" -C /tmp/ipk-work/; then
             echo "ERROR: Failed to extract IPK outer archive"
@@ -220,6 +226,45 @@ jobs:
             return 1
           fi
           
+          if [ ! -f /tmp/ipk-work/data.tar.gz ] || [ ! -f /tmp/ipk-work/control.tar.gz ]; then
+            echo "ERROR: data.tar.gz or control.tar.gz not found in IPK"
+            rm -rf /tmp/ipk-work
+            return 1
+          fi
+
+          mkdir -p /tmp/ipk-work/control
+          if ! tar -xzf /tmp/ipk-work/control.tar.gz -C /tmp/ipk-work/control/; then
+            echo "ERROR: Failed to extract control.tar.gz"
+            rm -rf /tmp/ipk-work
+            return 1
+          fi
+
+          if [ ! -f /tmp/ipk-work/control/control ]; then
+            echo "ERROR: control metadata not found in IPK"
+            rm -rf /tmp/ipk-work
+            return 1
+          fi
+
+          package_name=$(sed -n 's/^Package:[[:space:]]*//p' /tmp/ipk-work/control/control | head -1)
+          package_arch=$(sed -n 's/^Architecture:[[:space:]]*//p' /tmp/ipk-work/control/control | head -1)
+          package_depends=$(sed -n 's/^Depends:[[:space:]]*//p' /tmp/ipk-work/control/control | head -1)
+
+          if [ -z "$package_name" ] || [ -z "$package_arch" ]; then
+            echo "ERROR: IPK metadata is missing Package or Architecture"
+            rm -rf /tmp/ipk-work
+            return 1
+          fi
+
+          case "$package_arch" in
+            aarch64_cortex-a53|all)
+              ;;
+            *)
+              echo "ERROR: Unsupported IPK architecture for $package_name: $package_arch"
+              rm -rf /tmp/ipk-work
+              return 1
+              ;;
+          esac
+
           if [ ! -f /tmp/ipk-work/data.tar.gz ]; then
             echo "ERROR: data.tar.gz not found in IPK"
             rm -rf /tmp/ipk-work
@@ -242,6 +287,7 @@ jobs:
             fi
           done
           
+          printf '%s\t%s\t%s\n' "$package_name" "$package_arch" "$package_depends" >> "$PREBUILT_IPK_METADATA"
           echo "  ✓ Extraction successful"
           return 0
         }
@@ -283,6 +329,9 @@ jobs:
         echo "============================================"
         echo "Prebuilt files summary:"
         echo "============================================"
+        echo "IPK metadata:"
+        cat "$PREBUILT_IPK_METADATA"
+        echo ""
         echo "Binaries:"
         ls -lh "$GITHUB_WORKSPACE/files/usr/bin/" 2>/dev/null || true
         echo ""
@@ -617,6 +666,82 @@ jobs:
           exit 1
         }
 
+        require_rootfs_elf_runtime() {
+          local rel="$1"
+          local file_path="$ROOTFS_VIEW/$rel"
+          local interpreter=""
+          local soname=""
+
+          if [ ! -f "$file_path" ]; then
+            echo "✗ Missing ELF binary for runtime validation: /$rel"
+            exit 1
+          fi
+
+          if ! command -v readelf >/dev/null 2>&1; then
+            echo "✗ ERROR: readelf is required for ELF runtime verification"
+            exit 1
+          fi
+
+          interpreter=$(readelf -l "$file_path" 2>/dev/null | sed -n 's#.*Requesting program interpreter: \(.*\)\]#\1#p' | head -1)
+          if [ -n "$interpreter" ]; then
+            if [ -e "$ROOTFS_VIEW$interpreter" ]; then
+              echo "✓ ELF interpreter present for /$rel: $interpreter"
+            else
+              echo "✗ Missing ELF interpreter for /$rel: $interpreter"
+              exit 1
+            fi
+          fi
+
+          while IFS= read -r soname; do
+            [ -n "$soname" ] || continue
+            if [ -e "$ROOTFS_VIEW/lib/$soname" ] || [ -e "$ROOTFS_VIEW/usr/lib/$soname" ]; then
+              echo "✓ ELF dependency present for /$rel: $soname"
+            else
+              echo "✗ Missing ELF dependency for /$rel: $soname"
+              exit 1
+            fi
+          done <<EOF
+$(readelf -d "$file_path" 2>/dev/null | sed -n 's#.*Shared library: \[\(.*\)\]#\1#p')
+EOF
+        }
+
+        normalize_dep_name() {
+          local raw="$1"
+          local dep
+          dep=$(echo "$raw" | sed 's/([^)]*)//g' | cut -d'|' -f1 | xargs)
+          dep=${dep%%:*}
+          echo "$dep"
+        }
+
+        require_prebuilt_manifest_dependencies() {
+          local metadata_file="$1"
+          local pkg=""
+          local arch=""
+          local deps=""
+          local dep=""
+          local normalized=""
+
+          [ -f "$metadata_file" ] || return 0
+
+          while IFS=$'\t' read -r pkg arch deps; do
+            [ -n "$pkg" ] || continue
+            echo "Checking prebuilt package metadata: $pkg ($arch)"
+            IFS=',' read -ra dep_list <<< "$deps"
+            for dep in "${dep_list[@]}"; do
+              normalized=$(normalize_dep_name "$dep")
+              case "$normalized" in
+                ""|libc|kernel|base-files|busybox)
+                  continue
+                  ;;
+                @*)
+                  continue
+                  ;;
+              esac
+              require_manifest_pkg "$normalized"
+            done
+          done < "$metadata_file"
+        }
+
         ROOTFS_STAGE=$(find_rootfs_stage || true)
         ROOTFS_TMP=""
         ROOTFS_IMAGE=$(find "$GITHUB_WORKSPACE/openwrt/bin/targets" -type f \( -name "*squashfs-rootfs*" -o -name "*rootfs.squashfs" -o -name "*rootfs.img" -o -name "*rootfs.bin" \) ! -name "*sysupgrade*" ! -name "*factory*" 2>/dev/null | head -1)
@@ -667,6 +792,7 @@ jobs:
         require_rootfs_entry "usr/bin/easytier-core"
         require_rootfs_entry "usr/bin/easytier-cli"
         require_rootfs_entry "usr/bin/easytier-web"
+        require_rootfs_entry "usr/bin/wimlib-imagex"
         require_rootfs_entry "etc/init.d/easytier"
         require_rootfs_entry "etc/config/easytier"
         require_rootfs_entry "usr/lib/lua/luci/controller/easytier.lua"
@@ -677,6 +803,14 @@ jobs:
         require_rootfs_entry "root/mgrserver/commands.json"
         require_rootfs_entry "root/mgrserver/web-dist/index.html"
         require_rootfs_any "MgrServer server entry" "root/mgrserver/dist/index.js" "root/mgrserver/bundle/index.cjs"
+        require_rootfs_any "wimlib shared library" "usr/lib/libwim.so" "usr/lib/libwim.so.15"
+
+        require_prebuilt_manifest_dependencies "$GITHUB_WORKSPACE/prebuilt-ipk-metadata.txt"
+        require_rootfs_elf_runtime "usr/bin/sing-box"
+        require_rootfs_elf_runtime "usr/bin/easytier-core"
+        require_rootfs_elf_runtime "usr/bin/easytier-cli"
+        require_rootfs_elf_runtime "usr/bin/easytier-web"
+        require_rootfs_elf_runtime "usr/bin/wimlib-imagex"
 
         if [ -n "$ROOTFS_TMP" ]; then
           rm -rf "$ROOTFS_TMP"
