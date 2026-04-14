@@ -671,6 +671,7 @@ jobs:
           local file_path="$ROOTFS_VIEW/$rel"
           local interpreter=""
           local soname=""
+          local needed_libs=""
 
           if [ ! -f "$file_path" ]; then
             echo "✗ Missing ELF binary for runtime validation: /$rel"
@@ -692,7 +693,8 @@ jobs:
             fi
           fi
 
-          while IFS= read -r soname; do
+          needed_libs=$(readelf -d "$file_path" 2>/dev/null | sed -n 's#.*Shared library: \[\(.*\)\]#\1#p')
+          for soname in $needed_libs; do
             [ -n "$soname" ] || continue
             if [ -e "$ROOTFS_VIEW/lib/$soname" ] || [ -e "$ROOTFS_VIEW/usr/lib/$soname" ]; then
               echo "✓ ELF dependency present for /$rel: $soname"
@@ -700,9 +702,7 @@ jobs:
               echo "✗ Missing ELF dependency for /$rel: $soname"
               exit 1
             fi
-          done <<EOF
-$(readelf -d "$file_path" 2>/dev/null | sed -n 's#.*Shared library: \[\(.*\)\]#\1#p')
-EOF
+          done
         }
 
         normalize_dep_name() {
