@@ -347,6 +347,10 @@ jobs:
     - name: Load custom configuration
       run: |
         [ -e files ] && cp -r files openwrt/files
+        if [ -d package ]; then
+          mkdir -p openwrt/package
+          cp -r package/. openwrt/package/
+        fi
         [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
         chmod +x $DIY_P2_SH
         cd openwrt
