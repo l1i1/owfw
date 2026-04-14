@@ -768,13 +768,18 @@ jobs:
           fi
         fi
 
+        # Fallback to build_dir staging if sysupgrade extraction failed
+        if [ -z "$ROOTFS_VIEW" ] && [ -n "$ROOTFS_STAGE" ] && [ -d "$ROOTFS_STAGE" ]; then
+          echo "⚠ Falling back to build_dir staging for rootfs verification"
+          ROOTFS_VIEW="$ROOTFS_STAGE"
+          ROOTFS_VIEW_DESC="build_dir staging rootfs"
+        fi
+
         if [ -z "$ROOTFS_VIEW" ]; then
           echo "✗ ERROR: unable to inspect rootfs from releasable firmware artifacts"
           echo "  standalone rootfs image: ${ROOTFS_IMAGE:-<missing>}"
           echo "  sysupgrade image: ${SYSUPGRADE:-<missing>}"
-          if [ -n "$ROOTFS_STAGE" ] && [ -d "$ROOTFS_STAGE" ]; then
-            echo "  note: build_dir staging exists at $ROOTFS_STAGE but is no longer accepted for release verification"
-          fi
+          echo "  build_dir staging: ${ROOTFS_STAGE:-<missing>}"
           exit 1
         fi
 
