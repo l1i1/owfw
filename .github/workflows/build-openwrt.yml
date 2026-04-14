@@ -355,7 +355,7 @@ jobs:
           libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev \
           libssl-dev libtool lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 \
           python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig \
-          texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+          texinfo uglifyjs u-boot-tools upx-ucl unzip vim wget xmlto xxd zlib1g-dev
         sudo -E systemctl daemon-reload
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
@@ -619,14 +619,43 @@ jobs:
           local root_candidate=""
 
           mkdir -p "$sysupgrade_dir"
-          if ! tar -xf "$sysupgrade_path" -C "$sysupgrade_dir"; then
-            echo "✗ ERROR: failed to extract sysupgrade archive: $sysupgrade_path" >&2
-            return 1
+
+          # Try FIT image extraction first (for ipq60xx and similar platforms)
+          # FIT images use dumpimage/fitdump to extract components
+          if command -v dumpimage >/dev/null 2>&1; then
+            echo "Attempting FIT image extraction with dumpimage..."
+            # dumpimage -T flat_dt -p <position> -o <output> <image>
+            # Position 0 is usually kernel, position 1 is usually rootfs
+            for pos in 0 1 2 3; do
+              if dumpimage -T flat_dt -p "$pos" -o "$sysupgrade_dir/component_$pos" "$sysupgrade_path" 2>/dev/null; then
+                # Check if extracted component is a squashfs
+                if unsquashfs -s "$sysupgrade_dir/component_$pos" >/dev/null 2>&1; then
+                  root_candidate="$sysupgrade_dir/component_$pos"
+                  echo "✓ Found squashfs rootfs at FIT position $pos"
+                  break
+                fi
+              fi
+            done
           fi
 
-          root_candidate=$(find "$sysupgrade_dir" -type f \( -path "*/root" -o -name "*rootfs*" -o -name "*.squashfs" \) | head -1)
+          # Try fitdump if dumpimage failed
+          if [ -z "$root_candidate" ] && command -v fitdump >/dev/null 2>&1; then
+            echo "Attempting FIT image extraction with fitdump..."
+            fitdump "$sysupgrade_path" -o "$sysupgrade_dir" 2>/dev/null || true
+            root_candidate=$(find "$sysupgrade_dir" -type f -name "*.squashfs" -o -name "rootfs*" | head -1)
+          fi
+
+          # Fallback to tar extraction for traditional sysupgrade format
+          if [ -z "$root_candidate" ]; then
+            echo "Attempting tar extraction for traditional sysupgrade format..."
+            if tar -xf "$sysupgrade_path" -C "$sysupgrade_dir" 2>/dev/null; then
+              root_candidate=$(find "$sysupgrade_dir" -type f \( -path "*/root" -o -name "*rootfs*" -o -name "*.squashfs" \) | head -1)
+            fi
+          fi
+
           if [ -z "$root_candidate" ]; then
             echo "✗ ERROR: unable to find rootfs payload inside sysupgrade archive" >&2
+            echo "  sysupgrade format may be unrecognized" >&2
             find "$sysupgrade_dir" -maxdepth 3 -type f | sed 's#^#  extracted: #' >&2
             return 1
           fi
