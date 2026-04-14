@@ -551,6 +551,47 @@ jobs:
           return 1
         }
 
+        extract_rootfs_image() {
+          local image_path="$1"
+          local workdir="$2"
+          local outdir="$workdir/rootfs"
+          if ! unsquashfs -d "$outdir" "$image_path" >/dev/null 2>&1; then
+            echo "✗ ERROR: failed to unsquash rootfs image: $image_path" >&2
+            return 1
+          fi
+          ROOTFS_VIEW="$outdir"
+          ROOTFS_VIEW_DESC="unsquashed rootfs image"
+          return 0
+        }
+
+        extract_sysupgrade_rootfs() {
+          local sysupgrade_path="$1"
+          local workdir="$2"
+          local sysupgrade_dir="$workdir/sysupgrade"
+          local root_candidate=""
+
+          mkdir -p "$sysupgrade_dir"
+          if ! tar -xf "$sysupgrade_path" -C "$sysupgrade_dir"; then
+            echo "✗ ERROR: failed to extract sysupgrade archive: $sysupgrade_path" >&2
+            return 1
+          fi
+
+          root_candidate=$(find "$sysupgrade_dir" -type f \( -path "*/root" -o -name "*rootfs*" -o -name "*.squashfs" \) | head -1)
+          if [ -z "$root_candidate" ]; then
+            echo "✗ ERROR: unable to find rootfs payload inside sysupgrade archive" >&2
+            find "$sysupgrade_dir" -maxdepth 3 -type f | sed 's#^#  extracted: #' >&2
+            return 1
+          fi
+
+          if ! extract_rootfs_image "$root_candidate" "$workdir"; then
+            echo "✗ ERROR: extracted sysupgrade rootfs is not a valid squashfs payload" >&2
+            return 1
+          fi
+
+          ROOTFS_VIEW_DESC="unsquashed sysupgrade rootfs"
+          return 0
+        }
+
         require_rootfs_entry() {
           local rel="$1"
           if [ -e "$ROOTFS_VIEW/$rel" ]; then
@@ -577,24 +618,40 @@ jobs:
         }
 
         ROOTFS_STAGE=$(find_rootfs_stage || true)
-        if [ -z "$ROOTFS_STAGE" ] || [ ! -d "$ROOTFS_STAGE" ]; then
-          echo "✗ ERROR: unable to locate rootfs staging directory after build"
+        ROOTFS_TMP=""
+        ROOTFS_IMAGE=$(find "$GITHUB_WORKSPACE/openwrt/bin/targets" -type f \( -name "*squashfs-rootfs*" -o -name "*rootfs.squashfs" -o -name "*rootfs.img" -o -name "*rootfs.bin" \) ! -name "*sysupgrade*" ! -name "*factory*" 2>/dev/null | head -1)
+        ROOTFS_VIEW=""
+        ROOTFS_VIEW_DESC=""
+
+        if ! command -v unsquashfs >/dev/null 2>&1; then
+          echo "✗ ERROR: unsquashfs is required for release verification but is not installed"
           exit 1
         fi
 
-        ROOTFS_VIEW="$ROOTFS_STAGE"
-        ROOTFS_VIEW_DESC="build_dir rootfs staging"
-        ROOTFS_TMP=""
-        ROOTFS_IMAGE=$(find "$GITHUB_WORKSPACE/openwrt/bin/targets" -type f \( -name "*squashfs-rootfs*" -o -name "*rootfs.squashfs" -o -name "*rootfs.img" -o -name "*rootfs.bin" \) ! -name "*sysupgrade*" ! -name "*factory*" 2>/dev/null | head -1)
-        if [ -n "$ROOTFS_IMAGE" ] && command -v unsquashfs >/dev/null 2>&1; then
+        if [ -n "$ROOTFS_IMAGE" ]; then
           ROOTFS_TMP=$(mktemp -d /tmp/openwrt-rootfs-check.XXXXXX)
-          if unsquashfs -d "$ROOTFS_TMP" "$ROOTFS_IMAGE" >/dev/null 2>&1; then
-            ROOTFS_VIEW="$ROOTFS_TMP"
-            ROOTFS_VIEW_DESC="unsquashed rootfs image"
-          else
+          if ! extract_rootfs_image "$ROOTFS_IMAGE" "$ROOTFS_TMP"; then
             rm -rf "$ROOTFS_TMP"
             ROOTFS_TMP=""
           fi
+        fi
+
+        if [ -z "$ROOTFS_VIEW" ] && [ -n "$SYSUPGRADE" ]; then
+          ROOTFS_TMP=$(mktemp -d /tmp/openwrt-rootfs-check.XXXXXX)
+          if ! extract_sysupgrade_rootfs "$SYSUPGRADE" "$ROOTFS_TMP"; then
+            rm -rf "$ROOTFS_TMP"
+            ROOTFS_TMP=""
+          fi
+        fi
+
+        if [ -z "$ROOTFS_VIEW" ]; then
+          echo "✗ ERROR: unable to inspect rootfs from releasable firmware artifacts"
+          echo "  standalone rootfs image: ${ROOTFS_IMAGE:-<missing>}"
+          echo "  sysupgrade image: ${SYSUPGRADE:-<missing>}"
+          if [ -n "$ROOTFS_STAGE" ] && [ -d "$ROOTFS_STAGE" ]; then
+            echo "  note: build_dir staging exists at $ROOTFS_STAGE but is no longer accepted for release verification"
+          fi
+          exit 1
         fi
 
         echo "Using rootfs verification source: $ROOTFS_VIEW_DESC -> $ROOTFS_VIEW"
