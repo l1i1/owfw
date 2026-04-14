@@ -556,7 +556,6 @@ jobs:
           fi
         }
 
-        require_build_config "CONFIG_NODEJS_22=y"
         require_build_config "CONFIG_PACKAGE_node=y"
         require_build_config "CONFIG_PACKAGE_node-npm=y"
         require_build_config "CONFIG_PACKAGE_python3=y"
@@ -802,6 +801,8 @@ jobs:
         require_rootfs_entry "usr/share/mgrserver-defaults/pxe/tftpboot"
         require_rootfs_entry "root/mgrserver/commands.json"
         require_rootfs_entry "root/mgrserver/web-dist/index.html"
+        require_rootfs_entry "usr/bin/node"
+        require_rootfs_entry "usr/bin/npm"
         require_rootfs_any "MgrServer server entry" "root/mgrserver/dist/index.js" "root/mgrserver/bundle/index.cjs"
         require_rootfs_any "wimlib shared library" "usr/lib/libwim.so" "usr/lib/libwim.so.15"
 
