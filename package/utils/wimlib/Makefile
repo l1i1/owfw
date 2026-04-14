@@ -2,25 +2,29 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wimlib
 PKG_VERSION:=1.14.5
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://wimlib.net/downloads/
 PKG_HASH:=skip
 
-PKG_BUILD_DEPENDS:=openssl
-PKG_FIXUP:=autoreconf
 PKG_INSTALL:=1
 PKG_BUILD_PARALLEL:=1
 
 include $(INCLUDE_DIR)/package.mk
+
+# OpenWrt firmware only needs `wimlib-imagex info` for PXE image inspection.
+# Disable optional host-volume and FUSE mount integrations that default to "on"
+# on Linux and would otherwise require extra target libraries not packaged here.
+CONFIGURE_ARGS += \
+	--without-ntfs-3g \
+	--without-fuse
 
 define Package/wimlib
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=WIM library and tools
   URL:=https://wimlib.net/
-  DEPENDS:=+libopenssl
 endef
 
 define Package/wimlib/description
@@ -30,7 +34,9 @@ endef
 
 define Package/wimlib/install
 	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/.libs/wimlib-imagex $(1)/usr/bin/
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/wimlib-imagex $(1)/usr/bin/
+	$(INSTALL_DIR) $(1)/usr/lib
+	$(CP) $(PKG_INSTALL_DIR)/usr/lib/libwim.so* $(1)/usr/lib/
 endef
 
 define Package/wimlib/postinst
