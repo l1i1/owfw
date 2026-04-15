@@ -11,6 +11,7 @@ fi
 
 ROOTFS_TMP=""
 FACTORY_ROOTFS_TMP=""
+FACTORY_HEADER_TMP=""
 
 cleanup() {
   if [ -n "$ROOTFS_TMP" ] && [ -d "$ROOTFS_TMP" ]; then
@@ -18,6 +19,9 @@ cleanup() {
   fi
   if [ -n "$FACTORY_ROOTFS_TMP" ] && [ -d "$FACTORY_ROOTFS_TMP" ]; then
     rm -rf "$FACTORY_ROOTFS_TMP"
+  fi
+  if [ -n "$FACTORY_HEADER_TMP" ] && [ -d "$FACTORY_HEADER_TMP" ]; then
+    rm -rf "$FACTORY_HEADER_TMP"
   fi
 }
 trap cleanup EXIT
@@ -257,6 +261,36 @@ extract_sysupgrade_rootfs() {
   return 0
 }
 
+extract_sysupgrade_kernel() {
+  local sysupgrade_path="$1"
+  local out_path="$2"
+  local kernel_member=""
+
+  if ! tar -tf "$sysupgrade_path" >/dev/null 2>&1; then
+    echo "✗ ERROR: failed to read sysupgrade archive while extracting kernel: $sysupgrade_path" >&2
+    return 1
+  fi
+
+  kernel_member=$(tar -tf "$sysupgrade_path" | grep -E '(^|/)(kernel|.*kernel.*|.*\.itb)$' | head -1)
+  if [ -z "$kernel_member" ]; then
+    echo "✗ ERROR: unable to find kernel payload inside sysupgrade archive" >&2
+    tar -tf "$sysupgrade_path" | sed 's#^#  archive: #' >&2
+    return 1
+  fi
+
+  if ! tar -xOf "$sysupgrade_path" "$kernel_member" > "$out_path"; then
+    echo "✗ ERROR: failed to stream kernel payload from sysupgrade archive: $kernel_member" >&2
+    return 1
+  fi
+
+  if [ ! -s "$out_path" ]; then
+    echo "✗ ERROR: extracted sysupgrade kernel payload is empty: $kernel_member" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 extract_factory_rootfs() {
   local factory_path="$1"
   local workdir="$2"
@@ -282,6 +316,120 @@ extract_factory_rootfs() {
 
   ROOTFS_VIEW_DESC="factory squashfs rootfs"
   return 0
+}
+
+get_fdt_magic() {
+  python3 -c 'import pathlib, sys; data = pathlib.Path(sys.argv[1]).read_bytes(); print(data[:4].hex() if len(data) >= 4 else "")' "$1"
+}
+
+get_fdt_totalsize() {
+  python3 -c 'import pathlib, struct, sys; data = pathlib.Path(sys.argv[1]).read_bytes(); print(struct.unpack(">I", data[4:8])[0] if len(data) >= 8 else 0)' "$1"
+}
+
+verify_factory_header() {
+  local factory_path="$1"
+  local sysupgrade_path="$2"
+  local workdir="$3"
+  local squashfs_offset=""
+  local header_path="$workdir/factory-header.bin"
+  local header_fit_path="$workdir/factory-fit.bin"
+  local sysupgrade_kernel_path="$workdir/sysupgrade-kernel.bin"
+  local sysupgrade_fit_path="$workdir/sysupgrade-fit.bin"
+  local factory_magic=""
+  local sysupgrade_magic=""
+  local factory_totalsize=""
+  local sysupgrade_totalsize=""
+  local sysupgrade_kernel_size=""
+  local factory_sha256=""
+  local sysupgrade_sha256=""
+
+  if ! command -v dumpimage >/dev/null 2>&1; then
+    echo "✗ ERROR: dumpimage is required for factory header verification but is not installed"
+    exit 1
+  fi
+
+  squashfs_offset=$(python3 -c 'import pathlib, sys; data = pathlib.Path(sys.argv[1]).read_bytes(); print(data.find(b"hsqs"))' "$factory_path" 2>/dev/null) || squashfs_offset=""
+  if [ -z "$squashfs_offset" ] || [ "$squashfs_offset" -le 0 ]; then
+    echo "✗ ERROR: factory image is missing a non-empty header before squashfs payload: $factory_path"
+    exit 1
+  fi
+
+  if ! head -c "$squashfs_offset" "$factory_path" > "$header_path"; then
+    echo "✗ ERROR: failed to extract factory header region: $factory_path"
+    exit 1
+  fi
+
+  if [ ! -s "$header_path" ]; then
+    echo "✗ ERROR: extracted factory header region is empty"
+    exit 1
+  fi
+
+  factory_magic=$(get_fdt_magic "$header_path")
+  if [ "$factory_magic" != "d00dfeed" ]; then
+    echo "✗ ERROR: factory header does not start with FIT/DTB magic (got $factory_magic)"
+    exit 1
+  fi
+
+  factory_totalsize=$(get_fdt_totalsize "$header_path")
+  if [ -z "$factory_totalsize" ] || [ "$factory_totalsize" -le 0 ] || [ "$factory_totalsize" -gt "$squashfs_offset" ]; then
+    echo "✗ ERROR: invalid factory FIT totalsize: $factory_totalsize"
+    exit 1
+  fi
+
+  if ! head -c "$factory_totalsize" "$header_path" > "$header_fit_path"; then
+    echo "✗ ERROR: failed to trim factory FIT payload to DTB totalsize"
+    exit 1
+  fi
+
+  if ! dumpimage -l "$header_fit_path" >/dev/null 2>&1; then
+    echo "✗ ERROR: factory header FIT metadata is not readable via dumpimage"
+    exit 1
+  fi
+
+  if ! extract_sysupgrade_kernel "$sysupgrade_path" "$sysupgrade_kernel_path"; then
+    exit 1
+  fi
+
+  sysupgrade_magic=$(get_fdt_magic "$sysupgrade_kernel_path")
+  if [ "$sysupgrade_magic" != "d00dfeed" ]; then
+    echo "✗ ERROR: sysupgrade kernel payload is not a FIT/DTB image (got $sysupgrade_magic)"
+    exit 1
+  fi
+
+  sysupgrade_totalsize=$(get_fdt_totalsize "$sysupgrade_kernel_path")
+  sysupgrade_kernel_size=$(stat -c%s "$sysupgrade_kernel_path" 2>/dev/null || stat -f%z "$sysupgrade_kernel_path" 2>/dev/null)
+  if [ -z "$sysupgrade_totalsize" ] || [ "$sysupgrade_totalsize" -le 0 ] || [ "$sysupgrade_totalsize" -gt "$sysupgrade_kernel_size" ]; then
+    echo "✗ ERROR: invalid sysupgrade kernel FIT totalsize: $sysupgrade_totalsize"
+    exit 1
+  fi
+
+  if [ "$sysupgrade_totalsize" -ne "$factory_totalsize" ]; then
+    echo "✗ ERROR: factory FIT totalsize does not match sysupgrade kernel payload"
+    echo "  factory totalsize:   $factory_totalsize"
+    echo "  sysupgrade totalsize: $sysupgrade_totalsize"
+    exit 1
+  fi
+
+  if ! head -c "$sysupgrade_totalsize" "$sysupgrade_kernel_path" > "$sysupgrade_fit_path"; then
+    echo "✗ ERROR: failed to trim sysupgrade kernel FIT payload to DTB totalsize"
+    exit 1
+  fi
+
+  if ! dumpimage -l "$sysupgrade_fit_path" >/dev/null 2>&1; then
+    echo "✗ ERROR: sysupgrade kernel FIT metadata is not readable via dumpimage"
+    exit 1
+  fi
+
+  factory_sha256=$(compute_file_sha256 "$header_fit_path")
+  sysupgrade_sha256=$(compute_file_sha256 "$sysupgrade_fit_path")
+  if [ "$factory_sha256" != "$sysupgrade_sha256" ]; then
+    echo "✗ ERROR: factory FIT header/kernel payload does not match sysupgrade kernel payload"
+    echo "  factory fit sha256:    $factory_sha256"
+    echo "  sysupgrade kernel sha256: $sysupgrade_sha256"
+    exit 1
+  fi
+
+  echo "✓ factory FIT header/kernel matches sysupgrade kernel payload: $factory_sha256"
 }
 
 rootfs_has_entry() {
@@ -506,6 +654,9 @@ require_rootfs_elf_runtime "usr/bin/easytier-core"
 require_rootfs_elf_runtime "usr/bin/easytier-cli"
 require_rootfs_elf_runtime "usr/bin/easytier-web"
 require_rootfs_elf_runtime "usr/bin/wimlib-imagex"
+
+FACTORY_HEADER_TMP=$(mktemp -d /tmp/openwrt-factory-header-check.XXXXXX)
+verify_factory_header "$FACTORY" "$SYSUPGRADE" "$FACTORY_HEADER_TMP"
 
 FACTORY_ROOTFS_TMP=$(mktemp -d /tmp/openwrt-factory-rootfs-check.XXXXXX)
 if ! extract_factory_rootfs "$FACTORY" "$FACTORY_ROOTFS_TMP"; then
