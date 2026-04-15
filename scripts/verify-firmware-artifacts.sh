@@ -3,6 +3,7 @@ set -euo pipefail
 
 WORKSPACE_ROOT="${GITHUB_WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 FIRMWARE_DIR="${1:-${FIRMWARE:-}}"
+EXPECTED_FACTORY_SQUASHFS_OFFSET=6291456
 
 if [ -z "$FIRMWARE_DIR" ]; then
   echo "ERROR: firmware directory is required"
@@ -358,6 +359,12 @@ verify_factory_header() {
     echo "✗ ERROR: factory image is missing a non-empty header before squashfs payload: $factory_path"
     exit 1
   fi
+  if [ "$squashfs_offset" -ne "$EXPECTED_FACTORY_SQUASHFS_OFFSET" ]; then
+    echo "✗ ERROR: factory squashfs payload starts at an unexpected offset"
+    echo "  expected: $EXPECTED_FACTORY_SQUASHFS_OFFSET (0x$(printf '%x' "$EXPECTED_FACTORY_SQUASHFS_OFFSET"))"
+    echo "  actual:   $squashfs_offset (0x$(printf '%x' "$squashfs_offset"))"
+    exit 1
+  fi
 
   if ! head -c "$squashfs_offset" "$factory_path" > "$header_path"; then
     echo "✗ ERROR: failed to extract factory header region: $factory_path"
@@ -475,6 +482,7 @@ PY
   fi
 
   echo "✓ factory padding/trailer before squashfs is zero-filled: $factory_padding_size bytes"
+  echo "✓ factory squashfs payload starts at expected offset: $squashfs_offset"
 }
 
 rootfs_has_entry() {
