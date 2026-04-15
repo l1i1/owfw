@@ -626,51 +626,38 @@ jobs:
           local workdir="$2"
           local sysupgrade_dir="$workdir/sysupgrade"
           local root_candidate=""
+          local root_member=""
+          local magic=""
 
           mkdir -p "$sysupgrade_dir"
 
-          # Try FIT image extraction first (for ipq60xx and similar platforms)
-          # FIT images use dumpimage/fitdump to extract components
-          if command -v dumpimage >/dev/null 2>&1; then
-            echo "Attempting FIT image extraction with dumpimage..."
-            # dumpimage -T flat_dt -p <position> -o <output> <image>
-            # Position 0 is usually kernel, position 1 is usually rootfs
-            for pos in 0 1 2 3; do
-              if dumpimage -T flat_dt -p "$pos" -o "$sysupgrade_dir/component_$pos" "$sysupgrade_path" 2>/dev/null; then
-                # Check if extracted component is a squashfs
-                if unsquashfs -s "$sysupgrade_dir/component_$pos" >/dev/null 2>&1; then
-                  root_candidate="$sysupgrade_dir/component_$pos"
-                  echo "✓ Found squashfs rootfs at FIT position $pos"
-                  break
-                fi
-              fi
-            done
+          echo "Attempting tar extraction for sysupgrade rootfs payload..."
+          if ! tar -tf "$sysupgrade_path" >/dev/null 2>&1; then
+            echo "✗ ERROR: failed to read sysupgrade archive: $sysupgrade_path" >&2
+            return 1
           fi
 
-          # Try fitdump if dumpimage failed
-          if [ -z "$root_candidate" ] && command -v fitdump >/dev/null 2>&1; then
-            echo "Attempting FIT image extraction with fitdump..."
-            fitdump "$sysupgrade_path" -o "$sysupgrade_dir" 2>/dev/null || true
-            root_candidate=$(find "$sysupgrade_dir" -type f -name "*.squashfs" -o -name "rootfs*" | head -1)
-          fi
-
-          # Fallback to tar extraction for traditional sysupgrade format
-          if [ -z "$root_candidate" ]; then
-            echo "Attempting tar extraction for traditional sysupgrade format..."
-            if tar -xf "$sysupgrade_path" -C "$sysupgrade_dir" 2>/dev/null; then
-              root_candidate=$(find "$sysupgrade_dir" -type f \( -path "*/root" -o -name "*rootfs*" -o -name "*.squashfs" \) | head -1)
-            fi
-          fi
-
-          if [ -z "$root_candidate" ]; then
+          root_member=$(tar -tf "$sysupgrade_path" | grep -E '(^|/)(root|.*rootfs.*|.*\.squashfs)$' | head -1)
+          if [ -z "$root_member" ]; then
             echo "✗ ERROR: unable to find rootfs payload inside sysupgrade archive" >&2
-            echo "  sysupgrade format may be unrecognized" >&2
-            find "$sysupgrade_dir" -maxdepth 3 -type f | sed 's#^#  extracted: #' >&2
+            tar -tf "$sysupgrade_path" | sed 's#^#  archive: #' >&2
+            return 1
+          fi
+
+          root_candidate="$sysupgrade_dir/rootfs.bin"
+          if ! tar -xOf "$sysupgrade_path" "$root_member" > "$root_candidate"; then
+            echo "✗ ERROR: failed to stream rootfs payload from sysupgrade archive: $root_member" >&2
+            return 1
+          fi
+
+          magic=$(dd if="$root_candidate" bs=4 count=1 2>/dev/null | od -An -t x1 | tr -d ' \n')
+          if [ "$magic" != "68737173" ]; then
+            echo "✗ ERROR: sysupgrade rootfs payload is not squashfs (magic=$magic): $root_member" >&2
             return 1
           fi
 
           if ! extract_rootfs_image "$root_candidate" "$workdir"; then
-            echo "✗ ERROR: extracted sysupgrade rootfs is not a valid squashfs payload" >&2
+            echo "✗ ERROR: extracted sysupgrade rootfs could not be unsquashed: $root_member" >&2
             return 1
           fi
 
@@ -806,18 +793,13 @@ jobs:
           fi
         fi
 
-        # Fallback to build_dir staging if sysupgrade extraction failed
-        if [ -z "$ROOTFS_VIEW" ] && [ -n "$ROOTFS_STAGE" ] && [ -d "$ROOTFS_STAGE" ]; then
-          echo "⚠ Falling back to build_dir staging for rootfs verification"
-          ROOTFS_VIEW="$ROOTFS_STAGE"
-          ROOTFS_VIEW_DESC="build_dir staging rootfs"
-        fi
-
         if [ -z "$ROOTFS_VIEW" ]; then
           echo "✗ ERROR: unable to inspect rootfs from releasable firmware artifacts"
           echo "  standalone rootfs image: ${ROOTFS_IMAGE:-<missing>}"
           echo "  sysupgrade image: ${SYSUPGRADE:-<missing>}"
-          echo "  build_dir staging: ${ROOTFS_STAGE:-<missing>}"
+          if [ -n "$ROOTFS_STAGE" ] && [ -d "$ROOTFS_STAGE" ]; then
+            echo "  note: build_dir staging exists at $ROOTFS_STAGE but is not accepted for release verification"
+          fi
           exit 1
         fi
 
