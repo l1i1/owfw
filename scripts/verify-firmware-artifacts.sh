@@ -340,6 +340,11 @@ verify_factory_header() {
   local factory_totalsize=""
   local sysupgrade_totalsize=""
   local sysupgrade_kernel_size=""
+  local factory_padding_report=""
+  local factory_padding_size=""
+  local factory_padding_all_zero=""
+  local factory_padding_first_offset=""
+  local factory_padding_first_byte=""
   local factory_sha256=""
   local sysupgrade_sha256=""
 
@@ -430,6 +435,46 @@ verify_factory_header() {
   fi
 
   echo "✓ factory FIT header/kernel matches sysupgrade kernel payload: $factory_sha256"
+
+  factory_padding_report=$(python3 - "$factory_path" "$factory_totalsize" "$squashfs_offset" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+start = int(sys.argv[2])
+end = int(sys.argv[3])
+data = path.read_bytes()
+
+if start < 0 or end < start or end > len(data):
+    raise SystemExit(2)
+
+region = data[start:end]
+if not region:
+    print("0\t1\t\t")
+    raise SystemExit(0)
+
+for index, value in enumerate(region):
+    if value != 0:
+        print(f"{len(region)}\t0\t{index}\t{value:02x}")
+        raise SystemExit(0)
+
+print(f"{len(region)}\t1\t\t")
+PY
+  ) || {
+    echo "✗ ERROR: failed to inspect factory padding region between FIT payload and squashfs"
+    exit 1
+  }
+  IFS=$'\t' read -r factory_padding_size factory_padding_all_zero factory_padding_first_offset factory_padding_first_byte <<< "$factory_padding_report"
+
+  if [ "$factory_padding_all_zero" != "1" ]; then
+    echo "✗ ERROR: factory padding/trailer region before squashfs is not zero-filled"
+    echo "  padding size: $factory_padding_size bytes"
+    echo "  first unexpected byte offset: $((factory_totalsize + factory_padding_first_offset))"
+    echo "  first unexpected byte value: 0x$factory_padding_first_byte"
+    exit 1
+  fi
+
+  echo "✓ factory padding/trailer before squashfs is zero-filled: $factory_padding_size bytes"
 }
 
 rootfs_has_entry() {
