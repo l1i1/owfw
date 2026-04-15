@@ -612,7 +612,38 @@ jobs:
           local image_path="$1"
           local workdir="$2"
           local outdir="$workdir/rootfs"
-          if ! unsquashfs -d "$outdir" "$image_path" >/dev/null 2>&1; then
+          local normalized_image="$image_path"
+          local squashfs_meta=""
+          local squashfs_magic=""
+          local squashfs_bytes_used=""
+          local squashfs_file_size=""
+
+          squashfs_meta=$(python3 -c 'import os, struct, sys; p=sys.argv[1]; f=open(p, "rb"); hdr=f.read(48); f.close(); magic=hdr[:4].hex() if len(hdr) >= 4 else ""; bytes_used=struct.unpack_from("<Q", hdr, 40)[0] if len(hdr) >= 48 else 0; print(magic, bytes_used, os.path.getsize(p))' "$image_path" 2>/dev/null) || squashfs_meta=""
+          set -- $squashfs_meta
+          squashfs_magic="$1"
+          squashfs_bytes_used="$2"
+          squashfs_file_size="$3"
+
+          if [ "$squashfs_magic" != "68737173" ] || [ -z "$squashfs_bytes_used" ] || [ -z "$squashfs_file_size" ]; then
+            echo "✗ ERROR: rootfs image is not a readable squashfs payload: $image_path" >&2
+            return 1
+          fi
+
+          if [ "$squashfs_file_size" -lt "$squashfs_bytes_used" ]; then
+            echo "✗ ERROR: squashfs payload is truncated ($squashfs_file_size < $squashfs_bytes_used): $image_path" >&2
+            return 1
+          fi
+
+          if [ "$squashfs_file_size" -gt "$squashfs_bytes_used" ]; then
+            normalized_image="$workdir/rootfs.normalized.squashfs"
+            echo "Trimming squashfs payload from $squashfs_file_size to $squashfs_bytes_used bytes before verification..."
+            if ! head -c "$squashfs_bytes_used" "$image_path" > "$normalized_image"; then
+              echo "✗ ERROR: failed to normalize squashfs payload: $image_path" >&2
+              return 1
+            fi
+          fi
+
+          if ! unsquashfs -d "$outdir" "$normalized_image" >/dev/null 2>&1; then
             echo "✗ ERROR: failed to unsquash rootfs image: $image_path" >&2
             return 1
           fi
