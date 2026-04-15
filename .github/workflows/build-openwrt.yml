@@ -590,7 +590,16 @@ jobs:
 
         find_rootfs_stage() {
           local candidate
-          for candidate in $(find "$GITHUB_WORKSPACE/openwrt/build_dir" -mindepth 2 -maxdepth 3 -type d \( -name "root-*" -o -name "root.*" \) 2>/dev/null); do
+          # Prefer root-xxx (with files overlay) over root.orig-xxx (base rootfs only)
+          # root.orig-xxx is created early in build, root-xxx contains files overlay
+          for candidate in $(find "$GITHUB_WORKSPACE/openwrt/build_dir" -mindepth 2 -maxdepth 3 -type d -name "root-*" ! -name "root.orig-*" 2>/dev/null); do
+            if [ -f "$candidate/etc/openwrt_release" ]; then
+              echo "$candidate"
+              return 0
+            fi
+          done
+          # Fallback to root.orig-xxx if root-xxx not found
+          for candidate in $(find "$GITHUB_WORKSPACE/openwrt/build_dir" -mindepth 2 -maxdepth 3 -type d -name "root.orig-*" 2>/dev/null); do
             if [ -f "$candidate/etc/openwrt_release" ]; then
               echo "$candidate"
               return 0
