@@ -609,8 +609,15 @@ require_prebuilt_manifest_dependencies() {
   local deps=""
   local dep=""
   local normalized=""
+  local prebuilt_packages=""
 
   [ -f "$metadata_file" ] || return 0
+
+  while IFS=$'\t' read -r pkg arch deps; do
+    normalized=$(normalize_dep_name "$pkg")
+    [ -n "$normalized" ] || continue
+    prebuilt_packages="${prebuilt_packages}${normalized}"$'\n'
+  done < "$metadata_file"
 
   while IFS=$'\t' read -r pkg arch deps; do
     [ -n "$pkg" ] || continue
@@ -626,6 +633,10 @@ require_prebuilt_manifest_dependencies() {
           continue
           ;;
       esac
+      if printf '%s' "$prebuilt_packages" | grep -Fxq "$normalized"; then
+        echo "✓ prebuilt overlay dependency present: $normalized"
+        continue
+      fi
       require_manifest_pkg "$normalized"
     done
   done < "$metadata_file"
