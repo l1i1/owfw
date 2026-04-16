@@ -35,7 +35,6 @@ uci commit wireless >/dev/null 2>&1 || true
 
 if [ -f /etc/init.d/rc-common-selfheal ]; then
   /bin/sh /rom/etc/rc.common /etc/init.d/rc-common-selfheal enable >/dev/null 2>&1 || true
-  /bin/sh /rom/etc/rc.common /etc/init.d/rc-common-selfheal boot >/dev/null 2>&1 || true
 fi
 
 rm -f "$0"

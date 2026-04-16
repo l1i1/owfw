@@ -4,7 +4,7 @@ log_rc_common_selfheal() {
   echo "rc-common-selfheal: $1" > /dev/kmsg
 }
 
-do_rc_common_selfheal() {
+repair_rc_common() {
   local upper_etc="/overlay/upper/etc"
   local upper_rc_common="$upper_etc/rc.common"
   local upper_whiteout="$upper_etc/.wh.rc.common"
@@ -13,15 +13,38 @@ do_rc_common_selfheal() {
   [ -d "$upper_etc" ] || return 0
   [ -f "$rom_rc_common" ] || return 0
 
+  rm -f "$upper_rc_common" "$upper_whiteout"
+  cp "$rom_rc_common" "$upper_rc_common" || {
+    log_rc_common_selfheal "failed to copy /rom/etc/rc.common into overlay"
+    return 1
+  }
+  chmod 755 "$upper_rc_common" || {
+    log_rc_common_selfheal "failed to chmod repaired overlay rc.common"
+    return 1
+  }
+
+  [ -x /etc/rc.common ] && return 0
+
+  cp "$rom_rc_common" /etc/rc.common || {
+    log_rc_common_selfheal "failed to recreate /etc/rc.common through overlay mount"
+    return 1
+  }
+  chmod 755 /etc/rc.common || {
+    log_rc_common_selfheal "failed to chmod merged /etc/rc.common"
+    return 1
+  }
+
+  [ -x /etc/rc.common ] || {
+    log_rc_common_selfheal "/etc/rc.common still missing after repair"
+    return 1
+  }
+}
+
+do_rc_common_selfheal() {
   if [ ! -x /etc/rc.common ]; then
-    log_rc_common_selfheal "repairing missing /etc/rc.common before init"
-    rm -f "$upper_rc_common" "$upper_whiteout"
-    cp "$rom_rc_common" "$upper_rc_common" || {
-      log_rc_common_selfheal "failed to copy /rom/etc/rc.common into overlay"
-      return 1
-    }
-    chmod 755 "$upper_rc_common"
+    log_rc_common_selfheal "repairing missing /etc/rc.common after mount_root"
+    repair_rc_common
   fi
 }
 
-boot_hook_add preinit_mount_root do_rc_common_selfheal
+boot_hook_add preinit_main do_rc_common_selfheal

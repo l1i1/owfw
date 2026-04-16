@@ -1,12 +1,16 @@
 #!/bin/sh /rom/etc/rc.common
 
-START=99
+START=02
 USE_PROCD=0
 
 UPPER_ETC="/overlay/upper/etc"
 UPPER_RC_COMMON="$UPPER_ETC/rc.common"
 UPPER_RC_COMMON_WHITEOUT="$UPPER_ETC/.wh.rc.common"
 ROM_RC_COMMON="/rom/etc/rc.common"
+
+log_message() {
+  logger -t rc-common-selfheal "$1" 2>/dev/null || echo "rc-common-selfheal: $1" > /dev/kmsg
+}
 
 needs_repair() {
   [ -x /etc/rc.common ] && return 1
@@ -18,8 +22,15 @@ repair_rc_common() {
   [ -f "$ROM_RC_COMMON" ] || return 1
 
   rm -f "$UPPER_RC_COMMON" "$UPPER_RC_COMMON_WHITEOUT"
-  cp "$ROM_RC_COMMON" "$UPPER_RC_COMMON"
-  chmod 755 "$UPPER_RC_COMMON"
+  cp "$ROM_RC_COMMON" "$UPPER_RC_COMMON" || return 1
+  chmod 755 "$UPPER_RC_COMMON" || return 1
+
+  [ -x /etc/rc.common ] && return 0
+
+  cp "$ROM_RC_COMMON" /etc/rc.common || return 1
+  chmod 755 /etc/rc.common || return 1
+
+  [ -x /etc/rc.common ]
 }
 
 restart_service_via_rom() {
@@ -36,12 +47,13 @@ restart_service_via_rom() {
 boot() {
   needs_repair || return 0
 
-  logger -t rc-common-selfheal "repairing missing /etc/rc.common"
+  log_message "repairing missing /etc/rc.common"
   repair_rc_common || {
-    logger -t rc-common-selfheal "failed to restore /etc/rc.common from /rom"
+    log_message "failed to restore /etc/rc.common from /rom"
     return 1
   }
 
+  log_message "restored /etc/rc.common successfully"
   restart_service_via_rom log
   restart_service_via_rom system
   restart_service_via_rom network
