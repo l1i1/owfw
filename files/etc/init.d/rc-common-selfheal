@@ -1,0 +1,51 @@
+#!/bin/sh /rom/etc/rc.common
+
+START=99
+USE_PROCD=0
+
+UPPER_ETC="/overlay/upper/etc"
+UPPER_RC_COMMON="$UPPER_ETC/rc.common"
+UPPER_RC_COMMON_WHITEOUT="$UPPER_ETC/.wh.rc.common"
+ROM_RC_COMMON="/rom/etc/rc.common"
+
+needs_repair() {
+  [ -x /etc/rc.common ] && return 1
+  return 0
+}
+
+repair_rc_common() {
+  [ -d "$UPPER_ETC" ] || return 1
+  [ -f "$ROM_RC_COMMON" ] || return 1
+
+  rm -f "$UPPER_RC_COMMON" "$UPPER_RC_COMMON_WHITEOUT"
+  cp "$ROM_RC_COMMON" "$UPPER_RC_COMMON"
+  chmod 755 "$UPPER_RC_COMMON"
+}
+
+restart_service_via_rom() {
+  local service="$1"
+  local script="/etc/init.d/$service"
+
+  [ -f "$script" ] || return 0
+
+  /bin/sh "$ROM_RC_COMMON" "$script" restart >/dev/null 2>&1 \
+    || /bin/sh "$ROM_RC_COMMON" "$script" start >/dev/null 2>&1 \
+    || true
+}
+
+boot() {
+  needs_repair || return 0
+
+  logger -t rc-common-selfheal "repairing missing /etc/rc.common"
+  repair_rc_common || {
+    logger -t rc-common-selfheal "failed to restore /etc/rc.common from /rom"
+    return 1
+  }
+
+  restart_service_via_rom log
+  restart_service_via_rom system
+  restart_service_via_rom network
+  restart_service_via_rom dnsmasq
+  restart_service_via_rom odhcpd
+  restart_service_via_rom wpad
+}
