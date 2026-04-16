@@ -686,10 +686,13 @@ PRIMARY_ROOTFS_SHA256="$ROOTFS_SHA256"
 echo "Primary rootfs squashfs sha256: $PRIMARY_ROOTFS_SHA256"
 
 require_rootfs_entry "etc/init.d/mgrserver"
+require_rootfs_entry "etc/init.d/rc-common-selfheal"
 require_rootfs_entry "usr/bin/health-check"
 require_rootfs_entry "usr/bin/service-watchdog"
+require_rootfs_entry "etc/uci-defaults/96-ath11k-mac80211-compat"
 require_rootfs_entry "etc/uci-defaults/98-home-partition"
 require_rootfs_entry "etc/uci-defaults/99-service-watchdog-cron"
+require_rootfs_entry "lib/preinit/81_rc_common_selfheal"
 require_rootfs_entry "usr/bin/sing-box"
 require_rootfs_entry "etc/init.d/sing-box"
 require_rootfs_entry "etc/config/sing-box"
@@ -711,6 +714,20 @@ require_rootfs_entry "usr/bin/node"
 require_rootfs_entry "usr/bin/npm"
 require_rootfs_any "MgrServer server entry" "root/mgrserver/dist/index.js" "root/mgrserver/bundle/index.cjs"
 require_rootfs_any "wimlib shared library" "usr/lib/libwim.so" "usr/lib/libwim.so.15"
+
+ROOTFS_CONTENT_TMP=$(mktemp /tmp/rootfs-content.XXXXXX)
+if ! extract_rootfs_member "lib/netifd/wireless/mac80211.sh" "$ROOTFS_CONTENT_TMP"; then
+  rm -f "$ROOTFS_CONTENT_TMP"
+  echo "✗ ERROR: failed to extract /lib/netifd/wireless/mac80211.sh for compatibility verification"
+  exit 1
+fi
+if grep -Eq 'iw phy .*\bset (distance|frag)\b' "$ROOTFS_CONTENT_TMP"; then
+  rm -f "$ROOTFS_CONTENT_TMP"
+  echo "✗ ERROR: rootfs mac80211.sh still contains unsupported ath11k iw operations"
+  exit 1
+fi
+rm -f "$ROOTFS_CONTENT_TMP"
+echo "✓ rootfs mac80211.sh excludes unsupported ath11k iw operations"
 
 require_prebuilt_manifest_dependencies "$WORKSPACE_ROOT/prebuilt-ipk-metadata.txt"
 require_rootfs_elf_runtime "usr/bin/sing-box"

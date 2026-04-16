@@ -1,10 +1,9 @@
 #!/bin/sh
-# Work around ath11k drivers that reject iw distance/frag on first boot.
+# Keep ath11k first-boot settings idempotent without overriding mac80211.sh in overlay.
 
 set -e
 
 BOARD="$(cat /tmp/sysinfo/board_name 2>/dev/null || true)"
-MAC80211_SH="/lib/netifd/wireless/mac80211.sh"
 
 case "$BOARD" in
   jdcloud,re-ss-01|jdcloud_re-ss-01)
@@ -14,11 +13,6 @@ case "$BOARD" in
     exit 0
     ;;
 esac
-
-if [ -f "$MAC80211_SH" ]; then
-  sed -i '/set distance/d' "$MAC80211_SH"
-  sed -i '/set frag/d' "$MAC80211_SH"
-fi
 
 for radio in radio0 radio1; do
   if uci -q get "wireless.${radio}" >/dev/null 2>&1; then

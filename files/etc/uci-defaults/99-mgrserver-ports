@@ -2,11 +2,42 @@
 # MgrServer 端口配置 + LuCI 端口迁移
 # 对齐 deploy-openwrt.sh Step 5.1-5.3 逻辑
 
+set -e
+
+. /lib/functions.sh
+
 MGR_PORT="80"
 LUCI_PORT="3500"
+SCRIPT_OK="0"
+LOG_TAG="mgrserver-ports"
 
-# 确保脚本无论成功失败都会被清理，防止重复执行
-trap 'rm -f "$0"' EXIT
+cleanup() {
+  [ "$SCRIPT_OK" = "1" ] && rm -f "$0"
+}
+
+trap cleanup EXIT
+
+log_msg() {
+  logger -t "$LOG_TAG" "$1" 2>/dev/null || true
+}
+
+ensure_mgrserver_started() {
+  local attempt
+
+  /etc/init.d/mgrserver enable >/dev/null 2>&1 || true
+  /etc/init.d/mgrserver restart >/dev/null 2>&1 || /etc/init.d/mgrserver start >/dev/null 2>&1
+
+  for attempt in 1 2 3 4 5; do
+    if /etc/init.d/mgrserver health_check >/dev/null 2>&1; then
+      log_msg "MgrServer is healthy on port ${MGR_PORT}"
+      return 0
+    fi
+    sleep 2
+  done
+
+  log_msg "MgrServer failed health check after port migration"
+  return 1
+}
 
 # ============================================================
 # MgrServer 基础配置
@@ -72,46 +103,59 @@ uci commit uhttpd
 /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
 
 if [ "$NGINX_ENABLED" = "1" ]; then
+  rewrite_nginx_listen_entry() {
+    local entry="$1"
+    local new_entry=""
+
+    [ -n "$entry" ] || return 0
+
+    new_entry="$(printf '%s' "$entry" | sed -E "s/(^|[^0-9])80([^0-9]|$)/\\1$LUCI_PORT\\2/g")"
+    if [ "$new_entry" != "$entry" ]; then
+      NGINX_SECTION_CHANGED=1
+    fi
+
+    NGINX_NEW_LISTENS="${NGINX_NEW_LISTENS}${new_entry}
+"
+  }
+
+  rewrite_nginx_section() {
+    local section="$1"
+    local new_entry=""
+
+    NGINX_NEW_LISTENS=""
+    NGINX_SECTION_CHANGED=0
+    config_list_foreach "$section" listen rewrite_nginx_listen_entry
+
+    if [ "$NGINX_SECTION_CHANGED" = "1" ]; then
+      NGINX_CHANGED=1
+      uci -q delete nginx."$section".listen
+      while IFS= read -r new_entry; do
+        [ -n "$new_entry" ] || continue
+        uci add_list nginx."$section".listen="$new_entry"
+      done <<EOF_LISTEN_DST
+$NGINX_NEW_LISTENS
+EOF_LISTEN_DST
+    fi
+  }
+
+  config_load nginx
   NGINX_SECTIONS="$(uci show nginx 2>/dev/null | awk -F'[.=]' '/=server$/ {print $2}')"
   NGINX_CHANGED=0
   for sec in $NGINX_SECTIONS; do
-    LISTENS_RAW="$(uci show nginx."$sec".listen 2>/dev/null | sed -n "s/^nginx\.${sec}\.listen=//p")"
-    [ -n "$LISTENS_RAW" ] || continue
-    NEW_LISTENS=""
-    SEC_CHANGED=0
-
-    # 安全遍历: 不使用 eval，直接 for-in
-    for entry in $LISTENS_RAW; do
-      [ -n "$entry" ] || continue
-      new_entry="$(printf '%s' "$entry" | sed -E "s/(^|[^0-9])80([^0-9]|$)/\\1$LUCI_PORT\\2/g")"
-      if [ "$new_entry" != "$entry" ]; then
-        SEC_CHANGED=1
-      fi
-      NEW_LISTENS="${NEW_LISTENS}${new_entry}
-"
-    done
-
-    if [ "$SEC_CHANGED" = "1" ]; then
-      NGINX_CHANGED=1
-      uci -q delete nginx."$sec".listen
-      while IFS= read -r new_entry; do
-        [ -n "$new_entry" ] || continue
-        uci add_list nginx."$sec".listen="$new_entry"
-      done <<EOF_LISTEN_DST
-$NEW_LISTENS
-EOF_LISTEN_DST
-    fi
+    rewrite_nginx_section "$sec"
   done
 
   if [ "$NGINX_CHANGED" = "1" ]; then
     uci commit nginx
-    /etc/init.d/nginx restart >/dev/null 2>&1 || /etc/init.d/nginx start >/dev/null 2>&1 || true
+    /etc/init.d/nginx restart >/dev/null 2>&1 || /etc/init.d/nginx start >/dev/null 2>&1
   fi
 fi
 
 # ============================================================
 # 启用 MgrServer 服务
 # ============================================================
-/etc/init.d/mgrserver enable >/dev/null 2>&1 || true
+ensure_mgrserver_started
+
+SCRIPT_OK="1"
 
 exit 0

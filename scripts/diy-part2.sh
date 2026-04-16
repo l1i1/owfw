@@ -81,6 +81,38 @@ if [ -d "$GITHUB_WORKSPACE/files" ]; then
 fi
 
 # ============================================================
+# ath11k/mac80211 compatibility
+# Patch the source tree so the final rootfs already avoids unsupported
+# iw operations on JDCloud RE-SS-01, instead of pinning mac80211.sh in overlay.
+# ============================================================
+echo "Patching mac80211 wifi script for ath11k compatibility..."
+MAC80211_SCRIPT=""
+for candidate in \
+    "package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh" \
+    "package/network/config/wifi-scripts/files/lib/wifi/mac80211.sh"
+do
+    if [ -f "$candidate" ]; then
+        MAC80211_SCRIPT="$candidate"
+        break
+    fi
+done
+
+if [ -n "$MAC80211_SCRIPT" ]; then
+    sed -i '/set distance/d' "$MAC80211_SCRIPT"
+    sed -i '/set frag/d' "$MAC80211_SCRIPT"
+
+    if grep -q 'set distance\|set frag' "$MAC80211_SCRIPT"; then
+        echo "  ✗ ERROR: ath11k compatibility patch did not fully apply to $MAC80211_SCRIPT"
+        exit 1
+    fi
+
+    echo "  ✓ patched $MAC80211_SCRIPT"
+else
+    echo "  ✗ ERROR: unable to locate mac80211 wifi script in source tree"
+    exit 1
+fi
+
+# ============================================================
 # Add factory.bin for JDCloud RE-SS-01 (eMMC device)
 # Reference: https://github.com/VIKINGYFY/immortalwrt/blob/master/target/linux/qualcommax/image/ipq60xx.mk
 # U-Boot supports both factory.bin and sysupgrade.bin formats
