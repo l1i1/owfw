@@ -1,21 +1,118 @@
 #!/bin/sh
 # /home 分区自动挂载脚本
-# 对齐 deploy-openwrt.sh Step 4.0 逻辑
-# 首次启动时自动创建 /dev/mmcblk0p22 分区并挂载到 /home
+# 优先复用 GPT 中名为 "primary" 的大数据分区；
+# 不再假定 p22/p21 固定可用，避免误用系统分区。
 
 set -e
 
 DISK='/dev/mmcblk0'
-PART='/dev/mmcblk0p22'
+PART=''
 LEGACY_PART='/dev/mmcblk0p21'
 TARGET='/home'
 PXE_DEFAULTS='/usr/share/mgrserver-defaults/pxe'
 PXE_TARGET='/home/pxe'
 CREATED_PART='0'
 HOME_ON_OVERLAY='0'
+MIN_HOME_PART_MIB='4096'
 
 cleanup() {
     rm -f "$0"
+}
+
+part_size_mib() {
+    awk -v name="${1##*/}" '$4 == name {print int($3 / 2048)}' /proc/partitions 2>/dev/null | tail -n1
+}
+
+part_name() {
+    awk -F= '$1 == "PARTNAME" {print $2}' "/sys/class/block/${1##*/}/uevent" 2>/dev/null | tail -n1
+}
+
+is_reserved_part_name() {
+    case "$1" in
+        ''|rootfs|rootfs_1|rootfs_data|primary)
+            return 1
+            ;;
+        0:*|HLOS|HLOS_1|WIFIFW|WIFIFW_1|BOOTCONFIG|BOOTCONFIG1|QSEE|QSEE_1|DEVCFG|DEVCFG_1|RPM|RPM_1|CDT|CDT_1|APPSBLENV|APPSBL|APPSBL_1|ART|ETHPHYFW|plugin|log|swap)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+find_primary_part() {
+    for SYS_PART in /sys/class/block/mmcblk0/mmcblk0p*; do
+        [ -e "$SYS_PART" ] || continue
+        CANDIDATE="/dev/$(basename "$SYS_PART")"
+        [ -b "$CANDIDATE" ] || continue
+
+        PART_SIZE_MIB=$(part_size_mib "$CANDIDATE")
+        [ -n "$PART_SIZE_MIB" ] || continue
+        [ "$PART_SIZE_MIB" -gt "$MIN_HOME_PART_MIB" ] || continue
+
+        PART_NAME=$(part_name "$CANDIDATE")
+        if [ "$PART_NAME" = 'primary' ]; then
+            echo "$CANDIDATE"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+find_largest_safe_part() {
+    BEST_PART=''
+    BEST_NUM='0'
+
+    for SYS_PART in /sys/class/block/mmcblk0/mmcblk0p*; do
+        [ -e "$SYS_PART" ] || continue
+        PART_BASENAME=$(basename "$SYS_PART")
+        PART_NUM=${PART_BASENAME#mmcblk0p}
+        case "$PART_NUM" in
+            ''|*[!0-9]*)
+                continue
+                ;;
+        esac
+
+        CANDIDATE="/dev/$PART_BASENAME"
+        [ -b "$CANDIDATE" ] || continue
+
+        PART_SIZE_MIB=$(part_size_mib "$CANDIDATE")
+        [ -n "$PART_SIZE_MIB" ] || continue
+        [ "$PART_SIZE_MIB" -gt "$MIN_HOME_PART_MIB" ] || continue
+
+        PART_NAME=$(part_name "$CANDIDATE")
+        if is_reserved_part_name "$PART_NAME"; then
+            continue
+        fi
+
+        if [ "$PART_NUM" -gt "$BEST_NUM" ]; then
+            BEST_NUM="$PART_NUM"
+            BEST_PART="$CANDIDATE"
+        fi
+    done
+
+    [ -n "$BEST_PART" ] || return 1
+    echo "$BEST_PART"
+    return 0
+}
+
+find_home_part() {
+    FOUND_PART=$(find_primary_part || true)
+    if [ -n "$FOUND_PART" ]; then
+        echo "$FOUND_PART"
+        return 0
+    fi
+
+    if [ -b "$LEGACY_PART" ]; then
+        LEGACY_SIZE_MIB=$(part_size_mib "$LEGACY_PART")
+        if [ -n "$LEGACY_SIZE_MIB" ] && [ "$LEGACY_SIZE_MIB" -gt "$MIN_HOME_PART_MIB" ]; then
+            echo "$LEGACY_PART"
+            return 0
+        fi
+    fi
+
+    find_largest_safe_part
 }
 
 sync_pxe_defaults() {
@@ -42,18 +139,14 @@ if [ ! -b "$DISK" ]; then
     HOME_ON_OVERLAY='1'
 fi
 
-# 优先使用专用数据分区 p22，回退到 p21（如果 >4GB）
-if [ "$HOME_ON_OVERLAY" != '1' ] && [ ! -b "$PART" ] && [ -b "$LEGACY_PART" ]; then
-    LEGACY_SIZE_SECTORS=$(awk '$4 ~ /mmcblk0p21$/ {print $3}' /proc/partitions 2>/dev/null | tail -n1)
-    LEGACY_SIZE_MIB=$((LEGACY_SIZE_SECTORS / 2048))
-    if [ -n "$LEGACY_SIZE_SECTORS" ] && [ "$LEGACY_SIZE_MIB" -gt 4096 ]; then
-        PART="$LEGACY_PART"
-    fi
+# 优先使用 GPT 中名为 primary 的大分区，其次才是 legacy 布局
+if [ "$HOME_ON_OVERLAY" != '1' ]; then
+    PART=$(find_home_part || true)
 fi
 
 # 如果分区不存在，创建它
-if [ "$HOME_ON_OVERLAY" != '1' ] && [ ! -b "$PART" ]; then
-    echo "Partition not found, creating: $PART"
+if [ "$HOME_ON_OVERLAY" != '1' ] && [ -z "$PART" ]; then
+    echo 'No safe /home partition detected, creating a new primary data partition'
     # 仅使用 parted，避免 fdisk 分区号自动选择的歧义
     if command -v parted >/dev/null 2>&1; then
         PART_START_MIB=$(parted -ms "$DISK" unit MiB print 2>/dev/null \
@@ -69,12 +162,13 @@ if [ "$HOME_ON_OVERLAY" != '1' ] && [ ! -b "$PART" ]; then
     if [ "$HOME_ON_OVERLAY" != '1' ]; then
         command -v partprobe >/dev/null 2>&1 && partprobe "$DISK" || true
         sleep 2
+        PART=$(find_home_part || true)
         CREATED_PART='1'
     fi
 fi
 
 # 等待设备节点出现（parted 创建后可能需要时间刷新）
-if [ "$HOME_ON_OVERLAY" != '1' ] && [ ! -b "$PART" ]; then
+if [ "$HOME_ON_OVERLAY" != '1' ] && [ -n "$PART" ] && [ ! -b "$PART" ]; then
     mdev -s >/dev/null 2>&1 || true
     sleep 2
     # 再次检查是否出现（解决 parted 后立即检测失败的问题）
@@ -83,6 +177,12 @@ if [ "$HOME_ON_OVERLAY" != '1' ] && [ ! -b "$PART" ]; then
         mkdir -p "$TARGET"
         HOME_ON_OVERLAY='1'
     }
+fi
+
+if [ "$HOME_ON_OVERLAY" != '1' ] && [ -z "$PART" ]; then
+    echo 'Unable to resolve a safe /home partition after partitioning, falling back to overlay /home'
+    mkdir -p "$TARGET"
+    HOME_ON_OVERLAY='1'
 fi
 
 # 格式化（新分区或无文件系统时）
