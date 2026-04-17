@@ -21,6 +21,30 @@ log_msg() {
   logger -t "$LOG_TAG" "$1" 2>/dev/null || true
 }
 
+rewrite_nginx_listen_value() {
+  local entry="$1"
+  local first_token=""
+  local rest=""
+  local rewritten_first=""
+
+  [ -n "$entry" ] || return 1
+
+  first_token="${entry%% *}"
+  if [ "$first_token" = "$entry" ]; then
+    rest=""
+  else
+    rest="${entry#"$first_token"}"
+  fi
+
+  rewritten_first="$(printf '%s' "$first_token" | sed -E "s/(^|[^0-9])80$/\\1$LUCI_PORT/; s/(^|[^0-9])80([^0-9]*)$/\\1$LUCI_PORT\\2/")"
+  if [ "$rewritten_first" != "$first_token" ]; then
+    printf '%s%s' "$rewritten_first" "$rest"
+    return 0
+  fi
+
+  return 1
+}
+
 ensure_mgrserver_started() {
   local attempt
 
@@ -109,9 +133,10 @@ if [ "$NGINX_ENABLED" = "1" ]; then
 
     [ -n "$entry" ] || return 0
 
-    new_entry="$(printf '%s' "$entry" | sed -E "s/(^|[^0-9])80([^0-9]|$)/\\1$LUCI_PORT\\2/g")"
-    if [ "$new_entry" != "$entry" ]; then
+    if new_entry="$(rewrite_nginx_listen_value "$entry")"; then
       NGINX_SECTION_CHANGED=1
+    else
+      new_entry="$entry"
     fi
 
     NGINX_NEW_LISTENS="${NGINX_NEW_LISTENS}${new_entry}
