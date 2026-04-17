@@ -691,6 +691,7 @@ require_rootfs_entry "usr/bin/health-check"
 require_rootfs_entry "usr/bin/service-watchdog"
 require_rootfs_entry "etc/uci-defaults/96-ath11k-mac80211-compat"
 require_rootfs_entry "etc/uci-defaults/98-home-partition"
+require_rootfs_entry "etc/uci-defaults/99-mgrserver-ports"
 require_rootfs_entry "etc/uci-defaults/99-service-watchdog-cron"
 require_rootfs_entry "lib/preinit/81_rc_common_selfheal"
 require_rootfs_entry "usr/bin/sing-box"
@@ -715,19 +716,38 @@ require_rootfs_entry "usr/bin/npm"
 require_rootfs_any "MgrServer server entry" "root/mgrserver/dist/index.js" "root/mgrserver/bundle/index.cjs"
 require_rootfs_any "wimlib shared library" "usr/lib/libwim.so" "usr/lib/libwim.so.15"
 
-ROOTFS_CONTENT_TMP=$(mktemp /tmp/rootfs-content.XXXXXX)
-if ! extract_rootfs_member "lib/netifd/wireless/mac80211.sh" "$ROOTFS_CONTENT_TMP"; then
-  rm -f "$ROOTFS_CONTENT_TMP"
-  echo "✗ ERROR: failed to extract /lib/netifd/wireless/mac80211.sh for compatibility verification"
+verify_mac80211_runtime_compat() {
+  local rel=""
+  local tmp=""
+
+  for rel in "lib/netifd/wireless/mac80211.sh" "lib/wifi/mac80211.sh"; do
+    if ! rootfs_has_entry "$rel"; then
+      continue
+    fi
+
+    tmp=$(mktemp /tmp/rootfs-content.XXXXXX)
+    if ! extract_rootfs_member "$rel" "$tmp"; then
+      rm -f "$tmp"
+      echo "✗ ERROR: failed to extract /$rel for compatibility verification"
+      exit 1
+    fi
+
+    if grep -Eq 'iw phy .*\bset (distance|frag)\b' "$tmp"; then
+      rm -f "$tmp"
+      echo "✗ ERROR: rootfs /$rel still contains unsupported ath11k iw operations"
+      exit 1
+    fi
+
+    rm -f "$tmp"
+    echo "✓ rootfs mac80211 runtime script excludes unsupported ath11k iw operations: /$rel"
+    return 0
+  done
+
+  echo "✗ ERROR: unable to find a mac80211 runtime script in the verified rootfs"
   exit 1
-fi
-if grep -Eq 'iw phy .*\bset (distance|frag)\b' "$ROOTFS_CONTENT_TMP"; then
-  rm -f "$ROOTFS_CONTENT_TMP"
-  echo "✗ ERROR: rootfs mac80211.sh still contains unsupported ath11k iw operations"
-  exit 1
-fi
-rm -f "$ROOTFS_CONTENT_TMP"
-echo "✓ rootfs mac80211.sh excludes unsupported ath11k iw operations"
+}
+
+verify_mac80211_runtime_compat
 
 require_prebuilt_manifest_dependencies "$WORKSPACE_ROOT/prebuilt-ipk-metadata.txt"
 require_rootfs_elf_runtime "usr/bin/sing-box"
