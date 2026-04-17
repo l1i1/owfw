@@ -86,27 +86,24 @@ fi
 # iw operations on JDCloud RE-SS-01, instead of pinning mac80211.sh in overlay.
 # ============================================================
 echo "Patching mac80211 wifi script for ath11k compatibility..."
-MAC80211_SCRIPT=""
-for candidate in \
-    "package/network/config/wifi-scripts/files/lib/netifd/wireless/mac80211.sh" \
-    "package/network/config/wifi-scripts/files/lib/wifi/mac80211.sh"
-do
-    if [ -f "$candidate" ]; then
-        MAC80211_SCRIPT="$candidate"
-        break
-    fi
-done
+MAC80211_SCRIPTS=()
+while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    MAC80211_SCRIPTS+=("$candidate")
+done < <(find package/network/config/wifi-scripts -type f -name 'mac80211.sh' 2>/dev/null | sort)
 
-if [ -n "$MAC80211_SCRIPT" ]; then
-    sed -i '/set distance/d' "$MAC80211_SCRIPT"
-    sed -i '/set frag/d' "$MAC80211_SCRIPT"
+if [ "${#MAC80211_SCRIPTS[@]}" -gt 0 ]; then
+    for script_path in "${MAC80211_SCRIPTS[@]}"; do
+        sed -i '/set distance/d' "$script_path"
+        sed -i '/set frag/d' "$script_path"
+        echo "  ✓ patched $script_path"
+    done
 
-    if grep -q 'set distance\|set frag' "$MAC80211_SCRIPT"; then
-        echo "  ✗ ERROR: ath11k compatibility patch did not fully apply to $MAC80211_SCRIPT"
+    if grep -R -n -E 'iw phy .*set (distance|frag)|set distance|set frag' package/network/config/wifi-scripts >/dev/null 2>&1; then
+        echo "  ✗ ERROR: ath11k compatibility patch did not fully apply inside package/network/config/wifi-scripts"
+        grep -R -n -E 'iw phy .*set (distance|frag)|set distance|set frag' package/network/config/wifi-scripts || true
         exit 1
     fi
-
-    echo "  ✓ patched $MAC80211_SCRIPT"
 else
     echo "  ✗ ERROR: unable to locate mac80211 wifi script in source tree"
     exit 1
