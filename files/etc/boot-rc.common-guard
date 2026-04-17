@@ -1,0 +1,52 @@
+#!/bin/sh
+
+UPPER_ETC="/overlay/upper/etc"
+UPPER_RC_COMMON="$UPPER_ETC/rc.common"
+UPPER_RC_COMMON_WHITEOUT="$UPPER_ETC/.wh.rc.common"
+ROM_RC_COMMON="/rom/etc/rc.common"
+RCS_COMMAND="/etc/init.d/rcS S boot"
+
+log_message() {
+  echo "boot-rc.common-guard: $1" > /dev/kmsg 2>/dev/null || true
+}
+
+repair_overlay_rc_common() {
+  [ -d "$UPPER_ETC" ] || return 1
+  [ -f "$ROM_RC_COMMON" ] || return 1
+
+  rm -f "$UPPER_RC_COMMON" "$UPPER_RC_COMMON_WHITEOUT" || return 1
+  cp "$ROM_RC_COMMON" "$UPPER_RC_COMMON" || return 1
+  chmod 755 "$UPPER_RC_COMMON" || return 1
+}
+
+repair_merged_rc_common() {
+  [ -x /etc/rc.common ] && return 0
+  [ -f "$ROM_RC_COMMON" ] || return 1
+
+  cp "$ROM_RC_COMMON" /etc/rc.common || return 1
+  chmod 755 /etc/rc.common || return 1
+
+  [ -x /etc/rc.common ]
+}
+
+ensure_rc_common() {
+  [ -x /etc/rc.common ] && return 0
+
+  log_message "repairing missing /etc/rc.common before rcS"
+  repair_overlay_rc_common || {
+    log_message "failed to repair overlay rc.common before rcS"
+    return 1
+  }
+
+  repair_merged_rc_common || {
+    log_message "failed to restore merged /etc/rc.common before rcS"
+    return 1
+  }
+
+  log_message "restored /etc/rc.common before rcS"
+  return 0
+}
+
+ensure_rc_common || exit 1
+
+exec $RCS_COMMAND

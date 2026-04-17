@@ -687,6 +687,7 @@ echo "Primary rootfs squashfs sha256: $PRIMARY_ROOTFS_SHA256"
 
 require_rootfs_entry "etc/init.d/mgrserver"
 require_rootfs_entry "etc/init.d/rc-common-selfheal"
+require_rootfs_entry "etc/boot-rc.common-guard"
 require_rootfs_entry "usr/bin/health-check"
 require_rootfs_entry "usr/bin/service-watchdog"
 require_rootfs_entry "etc/uci-defaults/96-ath11k-mac80211-compat"
@@ -748,6 +749,33 @@ verify_mac80211_runtime_compat() {
 }
 
 verify_mac80211_runtime_compat
+
+verify_inittab_sysinit_guard() {
+  local tmp=""
+
+  if ! rootfs_has_entry "etc/inittab"; then
+    echo "✗ ERROR: missing /etc/inittab in verified rootfs"
+    exit 1
+  fi
+
+  tmp=$(mktemp /tmp/rootfs-inittab.XXXXXX)
+  if ! extract_rootfs_member "etc/inittab" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/inittab for boot-guard verification"
+    exit 1
+  fi
+
+  if ! grep -Fqx '::sysinit:/etc/boot-rc.common-guard' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/inittab does not route sysinit through /etc/boot-rc.common-guard"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ /etc/inittab routes sysinit through /etc/boot-rc.common-guard"
+}
+
+verify_inittab_sysinit_guard
 
 require_prebuilt_manifest_dependencies "$WORKSPACE_ROOT/prebuilt-ipk-metadata.txt"
 require_rootfs_elf_runtime "usr/bin/sing-box"

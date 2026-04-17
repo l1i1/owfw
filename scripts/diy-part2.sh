@@ -65,6 +65,12 @@ if [ -d "$GITHUB_WORKSPACE/files" ]; then
         fi
     done
 
+    # Ensure non-init boot wrapper scripts stay executable in the overlay.
+    if [ -f "$GITHUB_WORKSPACE/files/etc/boot-rc.common-guard" ]; then
+        chmod 0755 "$GITHUB_WORKSPACE/files/etc/boot-rc.common-guard"
+        echo "  chmod 0755 boot-rc.common-guard"
+    fi
+
     # Report MgrServer bundle size if present
     if [ -d "$GITHUB_WORKSPACE/files/root/mgrserver" ]; then
         MGR_SIZE=$(du -sh "$GITHUB_WORKSPACE/files/root/mgrserver" | awk '{print $1}')
