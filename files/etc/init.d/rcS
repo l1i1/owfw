@@ -4,7 +4,6 @@ UPPER_ETC="/overlay/upper/etc"
 UPPER_RC_COMMON="$UPPER_ETC/rc.common"
 UPPER_RC_COMMON_WHITEOUT="$UPPER_ETC/.wh.rc.common"
 ROM_RC_COMMON="/rom/etc/rc.common"
-ROM_RCS="/rom/etc/init.d/rcS"
 
 log_message() {
   echo "rcS-guard: $1" > /dev/kmsg 2>/dev/null || true
@@ -19,18 +18,9 @@ repair_overlay_rc_common() {
   chmod 755 "$UPPER_RC_COMMON" || return 1
 }
 
-repair_merged_rc_common() {
-  [ -x /etc/rc.common ] && return 0
-  [ -f "$ROM_RC_COMMON" ] || return 1
-
-  cp "$ROM_RC_COMMON" /etc/rc.common || return 1
-  chmod 755 /etc/rc.common || return 1
-
-  [ -x /etc/rc.common ]
-}
-
 ensure_rc_common() {
   [ -x /etc/rc.common ] && return 0
+  [ -c "$UPPER_RC_COMMON" ] || [ -e "$UPPER_RC_COMMON_WHITEOUT" ] || [ ! -e "$UPPER_RC_COMMON" ] || return 0
 
   log_message "repairing missing /etc/rc.common before rcS"
   repair_overlay_rc_common || {
@@ -38,16 +28,27 @@ ensure_rc_common() {
     return 1
   }
 
-  repair_merged_rc_common || {
-    log_message "failed to restore merged /etc/rc.common before rcS"
-    return 1
-  }
-
   log_message "restored /etc/rc.common before rcS"
   return 0
 }
 
-ensure_rc_common || exit 1
-[ -f "$ROM_RCS" ] || exit 1
+run_rc_scripts() {
+  local level="$1"
+  local param="$2"
+  local script=""
 
-exec /bin/sh "$ROM_RC_COMMON" "$ROM_RCS" "$@"
+  for script in /etc/rc.d/"$level"*; do
+    [ -x "$script" ] || continue
+    /bin/sh "$ROM_RC_COMMON" "$script" "$param"
+  done
+}
+
+[ -f "$ROM_RC_COMMON" ] || exit 1
+
+case "$1" in
+  S)
+    ensure_rc_common || exit 1
+    ;;
+esac
+
+run_rc_scripts "$1" "$2"
