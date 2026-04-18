@@ -4,10 +4,10 @@ UPPER_ETC="/overlay/upper/etc"
 UPPER_RC_COMMON="$UPPER_ETC/rc.common"
 UPPER_RC_COMMON_WHITEOUT="$UPPER_ETC/.wh.rc.common"
 ROM_RC_COMMON="/rom/etc/rc.common"
-RCS_COMMAND="/etc/init.d/rcS S boot"
+ROM_RCS="/rom/etc/init.d/rcS"
 
 log_message() {
-  echo "boot-rc.common-guard: $1" > /dev/kmsg 2>/dev/null || true
+  echo "rcS-guard: $1" > /dev/kmsg 2>/dev/null || true
 }
 
 repair_overlay_rc_common() {
@@ -48,5 +48,6 @@ ensure_rc_common() {
 }
 
 ensure_rc_common || exit 1
+[ -f "$ROM_RCS" ] || exit 1
 
-exec $RCS_COMMAND
+exec /bin/sh "$ROM_RC_COMMON" "$ROM_RCS" "$@"

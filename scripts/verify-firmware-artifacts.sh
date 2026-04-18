@@ -687,7 +687,7 @@ echo "Primary rootfs squashfs sha256: $PRIMARY_ROOTFS_SHA256"
 
 require_rootfs_entry "etc/init.d/mgrserver"
 require_rootfs_entry "etc/init.d/rc-common-selfheal"
-require_rootfs_entry "etc/boot-rc.common-guard"
+require_rootfs_entry "etc/init.d/rcS"
 require_rootfs_entry "usr/bin/health-check"
 require_rootfs_entry "usr/bin/service-watchdog"
 require_rootfs_entry "etc/uci-defaults/96-ath11k-mac80211-compat"
@@ -765,14 +765,14 @@ verify_inittab_sysinit_guard() {
     exit 1
   fi
 
-  if ! grep -Fqx '::sysinit:/etc/boot-rc.common-guard' "$tmp"; then
+  if ! grep -Fqx '::sysinit:/etc/init.d/rcS S boot' "$tmp"; then
     rm -f "$tmp"
-    echo "✗ ERROR: /etc/inittab does not route sysinit through /etc/boot-rc.common-guard"
+    echo "✗ ERROR: /etc/inittab does not keep the expected rcS sysinit entry"
     exit 1
   fi
 
   rm -f "$tmp"
-  echo "✓ /etc/inittab routes sysinit through /etc/boot-rc.common-guard"
+  echo "✓ /etc/inittab keeps the expected rcS sysinit entry"
 }
 
 verify_inittab_sysinit_guard
