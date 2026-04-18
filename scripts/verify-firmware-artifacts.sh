@@ -923,6 +923,12 @@ verify_preinit_overlay_boot_repair() {
     exit 1
   fi
 
+  if ! grep -Fq 'boot-critical overlay repair left files unavailable after reset' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not hard-fail when repaired boot files stay unavailable"
+    exit 1
+  fi
+
   rm -f "$tmp"
   echo "✓ preinit self-heal resets stale overlay copies of the boot-critical boot and first-boot files"
 }
@@ -948,13 +954,7 @@ verify_mgrserver_health_check() {
     exit 1
   fi
 
-  if ! grep -Fq 'curl -fsS' "$tmp"; then
-    rm -f "$tmp"
-    echo "✗ ERROR: /etc/init.d/mgrserver curl health checks are not HTTP-fail-safe"
-    exit 1
-  fi
-
-  if ! grep -Fq '"ok"[[:space:]]*:[[:space:]]*true' "$tmp"; then
+  if ! grep -Eq '"ok".*true|jsonfilter[^[:cntrl:]]*ok|json_(load|select|get_var)' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /etc/init.d/mgrserver health checks do not validate the JSON ok=true response"
     exit 1

@@ -32,10 +32,16 @@ repair_overlay_file_from_rom() {
 
   case "$mode" in
     0*755)
-      [ -x "$merged_path" ] || log_rc_common_selfheal "/$rel still not executable after overlay repair"
+      [ -x "$merged_path" ] || {
+        log_rc_common_selfheal "/$rel still not executable after overlay repair"
+        return 1
+      }
       ;;
     *)
-      [ -e "$merged_path" ] || log_rc_common_selfheal "/$rel still missing after overlay repair"
+      [ -e "$merged_path" ] || {
+        log_rc_common_selfheal "/$rel still missing after overlay repair"
+        return 1
+      }
       ;;
   esac
 }
@@ -72,6 +78,7 @@ repair_boot_critical_overlay_files() {
   local spec=""
   local rel=""
   local mode=""
+  local failed=0
 
   for spec in \
     "etc/inittab:0644" \
@@ -85,9 +92,11 @@ repair_boot_critical_overlay_files() {
 
     if boot_file_needs_overlay_reset "$rel" "$mode"; then
       log_rc_common_selfheal "resetting stale overlay copy of /$rel from /rom"
-      repair_overlay_file_from_rom "$rel" "$mode" || true
+      repair_overlay_file_from_rom "$rel" "$mode" || failed=1
     fi
   done
+
+  [ "$failed" -eq 0 ]
 }
 
 repair_rc_common() {
@@ -113,7 +122,10 @@ repair_rc_common() {
 }
 
 do_rc_common_selfheal() {
-  repair_boot_critical_overlay_files
+  repair_boot_critical_overlay_files || {
+    log_rc_common_selfheal "boot-critical overlay repair left files unavailable after reset"
+    return 1
+  }
 
   if [ ! -x /etc/rc.common ]; then
     log_rc_common_selfheal "repairing missing /etc/rc.common after mount_root"
