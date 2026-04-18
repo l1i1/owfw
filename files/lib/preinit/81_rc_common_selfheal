@@ -4,6 +4,91 @@ log_rc_common_selfheal() {
   echo "rc-common-selfheal: $1" > /dev/kmsg
 }
 
+repair_overlay_file_from_rom() {
+  local rel="$1"
+  local mode="$2"
+  local rom_path="/rom/$rel"
+  local merged_path="/$rel"
+  local upper_path="/overlay/upper/$rel"
+  local upper_dir="${upper_path%/*}"
+  local upper_whiteout="${upper_dir}/.wh.${rel##*/}"
+
+  [ -f "$rom_path" ] || return 0
+
+  mkdir -p "$upper_dir" || {
+    log_rc_common_selfheal "failed to create overlay parent for /$rel"
+    return 1
+  }
+
+  rm -f "$upper_path" "$upper_whiteout"
+  cp "$rom_path" "$upper_path" || {
+    log_rc_common_selfheal "failed to copy /$rel from /rom into overlay"
+    return 1
+  }
+  chmod "$mode" "$upper_path" || {
+    log_rc_common_selfheal "failed to chmod repaired overlay /$rel"
+    return 1
+  }
+
+  case "$mode" in
+    0*755)
+      [ -x "$merged_path" ] || log_rc_common_selfheal "/$rel still not executable after overlay repair"
+      ;;
+    *)
+      [ -e "$merged_path" ] || log_rc_common_selfheal "/$rel still missing after overlay repair"
+      ;;
+  esac
+}
+
+boot_file_needs_overlay_reset() {
+  local rel="$1"
+  local mode="$2"
+  local merged_path="/$rel"
+  local upper_path="/overlay/upper/$rel"
+  local upper_whiteout="/overlay/upper/${rel%/*}/.wh.${rel##*/}"
+
+  [ -e "$upper_path" ] || [ -e "$upper_whiteout" ] && return 0
+
+  case "$rel" in
+    etc/inittab)
+      grep -Fqx '::sysinit:/etc/init.d/rcS S boot' "$merged_path" 2>/dev/null || return 0
+      return 1
+      ;;
+  esac
+
+  case "$mode" in
+    0*755)
+      [ -x "$merged_path" ] || return 0
+      ;;
+    *)
+      [ -e "$merged_path" ] || return 0
+      ;;
+  esac
+
+  return 1
+}
+
+repair_boot_critical_overlay_files() {
+  local spec=""
+  local rel=""
+  local mode=""
+
+  for spec in \
+    "etc/inittab:0644" \
+    "etc/init.d/rcS:0755" \
+    "etc/init.d/rc-common-selfheal:0755" \
+    "etc/init.d/mgrserver:0755"
+  do
+    rel="${spec%%:*}"
+    mode="${spec##*:}"
+
+    if boot_file_needs_overlay_reset "$rel" "$mode"; then
+      log_rc_common_selfheal "resetting stale overlay copy of /$rel from /rom"
+      repair_overlay_file_from_rom "$rel" "$mode" || true
+    fi
+  done
+}
+
 repair_rc_common() {
   local upper_etc="/overlay/upper/etc"
   local upper_rc_common="$upper_etc/rc.common"
@@ -23,27 +108,15 @@ repair_rc_common() {
     return 1
   }
 
-  [ -x /etc/rc.common ] && return 0
-
-  cp "$rom_rc_common" /etc/rc.common || {
-    log_rc_common_selfheal "failed to recreate /etc/rc.common through overlay mount"
-    return 1
-  }
-  chmod 755 /etc/rc.common || {
-    log_rc_common_selfheal "failed to chmod merged /etc/rc.common"
-    return 1
-  }
-
-  [ -x /etc/rc.common ] || {
-    log_rc_common_selfheal "/etc/rc.common still missing after repair"
-    return 1
-  }
+  [ -x /etc/rc.common ] || log_rc_common_selfheal "/etc/rc.common still missing after overlay repair; rcS wrapper will fall back to /rom/etc/rc.common"
 }
 
 do_rc_common_selfheal() {
+  repair_boot_critical_overlay_files
+
   if [ ! -x /etc/rc.common ]; then
     log_rc_common_selfheal "repairing missing /etc/rc.common after mount_root"
-    repair_rc_common
+    repair_rc_common || true
   fi
 }
 

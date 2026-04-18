@@ -172,6 +172,20 @@ find_rootfs_stage() {
   return 1
 }
 
+find_rootfs_image() {
+  local targets_dir="$WORKSPACE_ROOT/openwrt/bin/targets"
+
+  if [ ! -d "$targets_dir" ]; then
+    return 0
+  fi
+
+  find "$targets_dir" -type f \
+    \( -name "*squashfs-rootfs*" -o -name "*rootfs.squashfs" -o -name "*rootfs.img" -o -name "*rootfs.bin" \) \
+    ! -name "*sysupgrade*" \
+    ! -name "*factory*" \
+    2>/dev/null | head -1
+}
+
 extract_rootfs_image() {
   local image_path="$1"
   local workdir="$2"
@@ -692,7 +706,7 @@ require_prebuilt_manifest_dependencies() {
 }
 
 ROOTFS_STAGE=$(find_rootfs_stage || true)
-ROOTFS_IMAGE=$(find "$WORKSPACE_ROOT/openwrt/bin/targets" -type f \( -name "*squashfs-rootfs*" -o -name "*rootfs.squashfs" -o -name "*rootfs.img" -o -name "*rootfs.bin" \) ! -name "*sysupgrade*" ! -name "*factory*" 2>/dev/null | head -1)
+ROOTFS_IMAGE=$(find_rootfs_image || true)
 ROOTFS_VIEW=""
 ROOTFS_LIST_FILE=""
 ROOTFS_SHA256=""
@@ -832,6 +846,77 @@ verify_inittab_sysinit_guard() {
 }
 
 verify_inittab_sysinit_guard
+
+verify_rcs_boot_wrapper() {
+  local tmp=""
+
+  if ! rootfs_has_entry "etc/init.d/rcS"; then
+    echo "✗ ERROR: missing /etc/init.d/rcS in verified rootfs"
+    exit 1
+  fi
+
+  tmp=$(mktemp /tmp/rootfs-rcs.XXXXXX)
+  if ! extract_rootfs_member "etc/init.d/rcS" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/init.d/rcS for boot-wrapper verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'repairing missing /etc/rc.common before rcS' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/rcS does not log the expected rc.common repair path"
+    exit 1
+  fi
+
+  if ! grep -Fq '/bin/sh "$ROM_RC_COMMON" "$script" "$param"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/rcS does not run rc.d scripts through /rom/etc/rc.common"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ /etc/init.d/rcS keeps the expected ROM rc.common boot wrapper"
+}
+
+verify_preinit_overlay_boot_repair() {
+  local tmp=""
+
+  if ! rootfs_has_entry "lib/preinit/81_rc_common_selfheal"; then
+    echo "✗ ERROR: missing /lib/preinit/81_rc_common_selfheal in verified rootfs"
+    exit 1
+  fi
+
+  tmp=$(mktemp /tmp/rootfs-preinit.XXXXXX)
+  if ! extract_rootfs_member "lib/preinit/81_rc_common_selfheal" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /lib/preinit/81_rc_common_selfheal for preinit verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'etc/inittab:0644' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/inittab"
+    exit 1
+  fi
+
+  if ! grep -Fq 'etc/init.d/rcS:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/init.d/rcS"
+    exit 1
+  fi
+
+  if ! grep -Fq 'etc/init.d/rc-common-selfheal:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/init.d/rc-common-selfheal"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ preinit self-heal resets stale overlay copies of the boot-critical scripts"
+}
+
+verify_rcs_boot_wrapper
+verify_preinit_overlay_boot_repair
 
 require_prebuilt_manifest_dependencies "$WORKSPACE_ROOT/prebuilt-ipk-metadata.txt"
 require_rootfs_elf_runtime "usr/bin/sing-box"
