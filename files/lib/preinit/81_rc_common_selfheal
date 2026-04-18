@@ -77,7 +77,8 @@ repair_boot_critical_overlay_files() {
     "etc/inittab:0644" \
     "etc/init.d/rcS:0755" \
     "etc/init.d/rc-common-selfheal:0755" \
-    "etc/init.d/mgrserver:0755"
+    "etc/init.d/mgrserver:0755" \
+    "etc/uci-defaults/99-mgrserver-ports:0755"
   do
     rel="${spec%%:*}"
     mode="${spec##*:}"

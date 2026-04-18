@@ -17,6 +17,10 @@ needs_repair() {
   return 0
 }
 
+verify_rc_common_visible() {
+  [ -x /etc/rc.common ]
+}
+
 repair_rc_common() {
   [ -d "$UPPER_ETC" ] || return 1
   [ -f "$ROM_RC_COMMON" ] || return 1
@@ -25,12 +29,7 @@ repair_rc_common() {
   cp "$ROM_RC_COMMON" "$UPPER_RC_COMMON" || return 1
   chmod 755 "$UPPER_RC_COMMON" || return 1
 
-  [ -x /etc/rc.common ] && return 0
-
-  cp "$ROM_RC_COMMON" /etc/rc.common || return 1
-  chmod 755 /etc/rc.common || return 1
-
-  [ -x /etc/rc.common ]
+  verify_rc_common_visible
 }
 
 restart_service_via_rom() {
@@ -50,6 +49,11 @@ boot() {
   log_message "repairing missing /etc/rc.common"
   repair_rc_common || {
     log_message "failed to restore /etc/rc.common from /rom"
+    return 1
+  }
+
+  verify_rc_common_visible || {
+    log_message "/etc/rc.common is still missing after overlay repair"
     return 1
   }
 

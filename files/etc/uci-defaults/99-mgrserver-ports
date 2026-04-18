@@ -36,7 +36,18 @@ rewrite_nginx_listen_value() {
     rest="${entry#"$first_token"}"
   fi
 
-  rewritten_first="$(printf '%s' "$first_token" | sed -E "s/(^|[^0-9])80$/\\1$LUCI_PORT/; s/(^|[^0-9])80([^0-9]*)$/\\1$LUCI_PORT\\2/")"
+  case "$first_token" in
+    80)
+      rewritten_first="$LUCI_PORT"
+      ;;
+    \[*\]:80|*:80|[A-Za-z0-9._-]*:80)
+      rewritten_first="${first_token%:80}:$LUCI_PORT"
+      ;;
+    *)
+      rewritten_first="$first_token"
+      ;;
+  esac
+
   if [ "$rewritten_first" != "$first_token" ]; then
     printf '%s%s' "$rewritten_first" "$rest"
     return 0

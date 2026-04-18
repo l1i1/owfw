@@ -911,12 +911,94 @@ verify_preinit_overlay_boot_repair() {
     exit 1
   fi
 
+  if ! grep -Fq 'etc/init.d/mgrserver:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/init.d/mgrserver"
+    exit 1
+  fi
+
+  if ! grep -Fq 'etc/uci-defaults/99-mgrserver-ports:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/99-mgrserver-ports"
+    exit 1
+  fi
+
   rm -f "$tmp"
-  echo "✓ preinit self-heal resets stale overlay copies of the boot-critical scripts"
+  echo "✓ preinit self-heal resets stale overlay copies of the boot-critical boot and first-boot files"
+}
+
+verify_mgrserver_health_check() {
+  local tmp=""
+
+  if ! rootfs_has_entry "etc/init.d/mgrserver"; then
+    echo "✗ ERROR: missing /etc/init.d/mgrserver in verified rootfs"
+    exit 1
+  fi
+
+  tmp=$(mktemp /tmp/rootfs-mgrserver-init.XXXXXX)
+  if ! extract_rootfs_member "etc/init.d/mgrserver" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/init.d/mgrserver for health-check verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'HEALTH_CHECK_URL="http://127.0.0.1:%s/api/health"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/mgrserver does not target /api/health"
+    exit 1
+  fi
+
+  if ! grep -Fq 'curl -fsS' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/mgrserver curl health checks are not HTTP-fail-safe"
+    exit 1
+  fi
+
+  if ! grep -Fq '"ok"[[:space:]]*:[[:space:]]*true' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/mgrserver health checks do not validate the JSON ok=true response"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ /etc/init.d/mgrserver uses the expected /api/health JSON health check"
+}
+
+verify_rc_common_selfheal_script() {
+  local tmp=""
+
+  if ! rootfs_has_entry "etc/init.d/rc-common-selfheal"; then
+    echo "✗ ERROR: missing /etc/init.d/rc-common-selfheal in verified rootfs"
+    exit 1
+  fi
+
+  tmp=$(mktemp /tmp/rootfs-rc-common-selfheal.XXXXXX)
+  if ! extract_rootfs_member "etc/init.d/rc-common-selfheal" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/init.d/rc-common-selfheal for verification"
+    exit 1
+  fi
+
+  if grep -Fq 'cp "$ROM_RC_COMMON" /etc/rc.common' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/rc-common-selfheal still writes directly into merged /etc/rc.common"
+    exit 1
+  fi
+
+  if ! grep -Fq '/etc/rc.common is still missing after overlay repair' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/rc-common-selfheal does not hard-fail when /etc/rc.common stays missing"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ /etc/init.d/rc-common-selfheal fails loudly if merged /etc/rc.common stays missing"
 }
 
 verify_rcs_boot_wrapper
 verify_preinit_overlay_boot_repair
+verify_mgrserver_health_check
+verify_rc_common_selfheal_script
 
 require_prebuilt_manifest_dependencies "$WORKSPACE_ROOT/prebuilt-ipk-metadata.txt"
 require_rootfs_elf_runtime "usr/bin/sing-box"

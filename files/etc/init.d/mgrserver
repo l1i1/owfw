@@ -10,7 +10,7 @@ SERVICE_NAME="mgrserver"
 DEFAULT_APP_DIR="/root/mgrserver"
 PIDFILE="/var/run/${SERVICE_NAME}.pid"
 HEALTH_CHECK_INTERVAL=30
-HEALTH_CHECK_URL="http://127.0.0.1:%s/health"
+HEALTH_CHECK_URL="http://127.0.0.1:%s/api/health"
 LOG_DIR="/var/log/mgrserver"
 MAX_LOG_SIZE="1M"
 MAX_LOG_FILES=3
@@ -49,17 +49,22 @@ setup_logging() {
 # Health check function
 do_health_check() {
   local port="$1"
-  local url=$(printf "$HEALTH_CHECK_URL" "$port")
+  local url=""
+  local response=""
   local max_retries=3
   local retry_delay=5
-  
+
+  url="$(printf "$HEALTH_CHECK_URL" "$port")"
+
   for i in $(seq 1 $max_retries); do
     if command -v curl >/dev/null 2>&1; then
-      if curl -s --connect-timeout 5 --max-time 10 "$url" >/dev/null 2>&1; then
+      response="$(curl -fsS --connect-timeout 5 --max-time 10 "$url" 2>/dev/null || true)"
+      if printf '%s' "$response" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
         return 0
       fi
     elif command -v wget >/dev/null 2>&1; then
-      if wget -q -T 10 -O - "$url" >/dev/null 2>&1; then
+      response="$(wget -q -T 10 -O - "$url" 2>/dev/null || true)"
+      if printf '%s' "$response" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
         return 0
       fi
     else
@@ -97,7 +102,7 @@ status_service() {
   # Health check
   echo "Health Check:"
   if do_health_check "$port"; then
-    echo "  HTTP: OK (http://127.0.0.1:$port/health)"
+    echo "  HTTP: OK (http://127.0.0.1:$port/api/health)"
   else
     echo "  HTTP: FAILED"
   fi
