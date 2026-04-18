@@ -529,6 +529,55 @@ require_rootfs_entry() {
   fi
 }
 
+rootfs_mode_for_entry() {
+  local rel="$1"
+  [ -n "$ROOTFS_LIST_FILE" ] || return 1
+  python3 - "$ROOTFS_LIST_FILE" "$rel" <<'PY'
+import sys
+
+list_file = sys.argv[1]
+target = f"squashfs-root/{sys.argv[2]}"
+
+with open(list_file, "r", encoding="utf-8", errors="replace") as fh:
+    for raw_line in fh:
+        line = raw_line.rstrip("\n")
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        mode = parts[0]
+        path = parts[-1]
+        if " -> " in line:
+            path = line.split(" -> ", 1)[0].rsplit(None, 1)[-1]
+        if path == target:
+            print(mode)
+            sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
+require_rootfs_executable() {
+  local rel="$1"
+  local mode=""
+
+  mode=$(rootfs_mode_for_entry "$rel") || {
+    echo "✗ Missing rootfs entry for executable check: /$rel"
+    exit 1
+  }
+
+  case "$mode" in
+    -??x??x??x|-??x??x???|-??x??????)
+      echo "✓ rootfs entry is executable: /$rel ($mode)"
+      ;;
+    *)
+      echo "✗ ERROR: rootfs entry is not executable: /$rel ($mode)"
+      exit 1
+      ;;
+  esac
+}
+
 require_rootfs_any() {
   local description="$1"
   shift
@@ -716,6 +765,13 @@ require_rootfs_entry "usr/bin/node"
 require_rootfs_entry "usr/bin/npm"
 require_rootfs_any "MgrServer server entry" "root/mgrserver/dist/index.js" "root/mgrserver/bundle/index.cjs"
 require_rootfs_any "wimlib shared library" "usr/lib/libwim.so" "usr/lib/libwim.so.15"
+require_rootfs_executable "etc/init.d/mgrserver"
+require_rootfs_executable "etc/init.d/rc-common-selfheal"
+require_rootfs_executable "etc/init.d/rcS"
+require_rootfs_executable "etc/uci-defaults/96-ath11k-mac80211-compat"
+require_rootfs_executable "etc/uci-defaults/98-home-partition"
+require_rootfs_executable "etc/uci-defaults/99-mgrserver-ports"
+require_rootfs_executable "etc/uci-defaults/99-service-watchdog-cron"
 
 verify_mac80211_runtime_compat() {
   local rel=""

@@ -48,9 +48,10 @@ fi
 # MgrServer: ensure files overlay permissions
 # ============================================================
 echo "Setting MgrServer file permissions..."
-if [ -d "$GITHUB_WORKSPACE/files" ]; then
+OVERLAY_DIR="$PWD/files"
+if [ -d "$OVERLAY_DIR" ]; then
     # Ensure all uci-defaults scripts are executable
-    for f in "$GITHUB_WORKSPACE/files/etc/uci-defaults/"*; do
+    for f in "$OVERLAY_DIR/etc/uci-defaults/"*; do
         if [ -f "$f" ]; then
             chmod 0755 "$f"
             echo "  chmod 0755 $(basename "$f")"
@@ -58,7 +59,7 @@ if [ -d "$GITHUB_WORKSPACE/files" ]; then
     done
 
     # Ensure init.d scripts are executable
-    for f in "$GITHUB_WORKSPACE/files/etc/init.d/"*; do
+    for f in "$OVERLAY_DIR/etc/init.d/"*; do
         if [ -f "$f" ]; then
             chmod 0755 "$f"
             echo "  chmod 0755 $(basename "$f")"
@@ -66,16 +67,16 @@ if [ -d "$GITHUB_WORKSPACE/files" ]; then
     done
 
     # Report MgrServer bundle size if present
-    if [ -d "$GITHUB_WORKSPACE/files/root/mgrserver" ]; then
-        MGR_SIZE=$(du -sh "$GITHUB_WORKSPACE/files/root/mgrserver" | awk '{print $1}')
+    if [ -d "$OVERLAY_DIR/root/mgrserver" ]; then
+        MGR_SIZE=$(du -sh "$OVERLAY_DIR/root/mgrserver" | awk '{print $1}')
         echo "  MgrServer bundle size: $MGR_SIZE"
     else
         echo "  WARNING: MgrServer bundle not found at files/root/mgrserver"
     fi
 
     # Report PXE resources size if present
-    if [ -d "$GITHUB_WORKSPACE/files/usr/share/mgrserver-defaults/pxe" ]; then
-        PXE_SIZE=$(du -sh "$GITHUB_WORKSPACE/files/usr/share/mgrserver-defaults/pxe" | awk '{print $1}')
+    if [ -d "$OVERLAY_DIR/usr/share/mgrserver-defaults/pxe" ]; then
+        PXE_SIZE=$(du -sh "$OVERLAY_DIR/usr/share/mgrserver-defaults/pxe" | awk '{print $1}')
         echo "  PXE resources size: $PXE_SIZE"
     fi
 fi
