@@ -835,7 +835,7 @@ verify_inittab_sysinit_guard() {
     exit 1
   fi
 
-  if ! grep -Fqx '::sysinit:/bin/sh /etc/init.d/rcS S boot' "$tmp"; then
+  if ! grep -Fqx '::sysinit:/etc/init.d/rcS S boot' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /etc/inittab does not keep the expected rcS sysinit entry"
     exit 1
