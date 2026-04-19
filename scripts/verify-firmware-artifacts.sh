@@ -1001,6 +1001,68 @@ verify_rc_common_selfheal_script() {
   echo "✓ /etc/init.d/rc-common-selfheal fails loudly if merged /etc/rc.common stays missing"
 }
 
+verify_uci_defaults_boot_semantics() {
+  local tmp=""
+
+  tmp=$(mktemp /tmp/rootfs-ath11k-defaults.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/96-ath11k-mac80211-compat" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/96-ath11k-mac80211-compat for boot-semantics verification"
+    exit 1
+  fi
+
+  if grep -Fq 'rm -f "$0"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/96-ath11k-mac80211-compat still tries to self-delete via \$0"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+
+  tmp=$(mktemp /tmp/rootfs-home-defaults.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/98-home-partition" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/98-home-partition for boot-semantics verification"
+    exit 1
+  fi
+
+  if grep -Fq 'rm -f "$0"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/98-home-partition still tries to self-delete via \$0"
+    exit 1
+  fi
+
+  if grep -Fq 'mountpoint -q "$TARGET"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/98-home-partition still depends on mountpoint(1)"
+    exit 1
+  fi
+
+  if ! grep -Fq 'mounted_source_for_target()' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/98-home-partition does not use /proc/mounts-based mount detection"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+
+  tmp=$(mktemp /tmp/rootfs-ports-defaults.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/99-mgrserver-ports" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/99-mgrserver-ports for boot-semantics verification"
+    exit 1
+  fi
+
+  if grep -Fq 'rm -f "$0"' "$tmp" || grep -Fq 'trap cleanup EXIT' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-mgrserver-ports still tries to self-delete via \$0"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ uci-defaults rely on boot-managed cleanup and avoid mountpoint(1) dependencies"
+}
+
 verify_rom_rc_common_runtime_calls() {
   local tmp=""
 
@@ -1082,6 +1144,7 @@ verify_rcs_boot_wrapper
 verify_preinit_overlay_boot_repair
 verify_mgrserver_health_check
 verify_rc_common_selfheal_script
+verify_uci_defaults_boot_semantics
 verify_rom_rc_common_runtime_calls
 
 require_prebuilt_manifest_dependencies "$WORKSPACE_ROOT/prebuilt-ipk-metadata.txt"

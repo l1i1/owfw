@@ -9,7 +9,6 @@ case "$BOARD" in
   jdcloud,re-ss-01|jdcloud_re-ss-01)
     ;;
   *)
-    rm -f "$0"
     exit 0
     ;;
 esac
@@ -31,5 +30,4 @@ if [ -f /etc/init.d/rc-common-selfheal ]; then
   /bin/sh /rom/etc/rc.common /etc/init.d/rc-common-selfheal enable >/dev/null 2>&1 || true
 fi
 
-rm -f "$0"
 exit 0

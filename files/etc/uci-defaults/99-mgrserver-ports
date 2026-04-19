@@ -8,15 +8,8 @@ set -e
 
 MGR_PORT="80"
 LUCI_PORT="3500"
-SCRIPT_OK="0"
 LOG_TAG="mgrserver-ports"
 RC_COMMON="/rom/etc/rc.common"
-
-cleanup() {
-  [ "$SCRIPT_OK" = "1" ] && rm -f "$0"
-}
-
-trap cleanup EXIT
 
 log_msg() {
   logger -t "$LOG_TAG" "$1" 2>/dev/null || true
@@ -207,7 +200,5 @@ fi
 # 启用 MgrServer 服务
 # ============================================================
 ensure_mgrserver_started
-
-SCRIPT_OK="1"
 
 exit 0

@@ -31,10 +31,6 @@ run_init_script() {
     "$script" "$@"
 }
 
-cleanup() {
-    rm -f "$0"
-}
-
 part_size_mib() {
     awk -v name="${1##*/}" '$4 == name {print int($3 / 2048)}' /proc/partitions 2>/dev/null | tail -n1
 }
@@ -148,6 +144,10 @@ sync_pxe_defaults() {
     return 0
 }
 
+mounted_source_for_target() {
+    awk -v target="$1" '$2 == target {print $1; exit}' /proc/mounts 2>/dev/null
+}
+
 # 仅在 eMMC 设备存在时执行
 if [ ! -b "$DISK" ]; then
     echo "Disk device not found: $DISK, falling back to overlay /home"
@@ -229,8 +229,10 @@ fi
 # 挂载
 mkdir -p "$TARGET"
 SKIP_MOUNT='0'
-if [ "$HOME_ON_OVERLAY" != '1' ] && mountpoint -q "$TARGET"; then
-    CURR_SRC=$(awk '$2 == "/home" {print $1}' /proc/mounts | tail -n1)
+if [ "$HOME_ON_OVERLAY" != '1' ]; then
+    CURR_SRC=$(mounted_source_for_target "$TARGET")
+fi
+if [ "$HOME_ON_OVERLAY" != '1' ] && [ -n "${CURR_SRC:-}" ]; then
     if [ "$CURR_SRC" = "$PART" ]; then
         SKIP_MOUNT='1'
     else
@@ -266,6 +268,4 @@ if [ "$HOME_ON_OVERLAY" = '1' ]; then
 fi
 
 echo "/home partition ready: $PART -> $TARGET ($PART_FSTYPE)"
-
-cleanup
 exit 0
