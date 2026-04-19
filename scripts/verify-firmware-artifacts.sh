@@ -1059,6 +1059,12 @@ verify_uci_defaults_boot_semantics() {
     exit 1
   fi
 
+  if grep -En '^[[:space:]]*uci -q (delete|del_list) ' "$tmp" | grep -Ev '\|\| true([[:space:]]|$)' >/dev/null 2>&1; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-mgrserver-ports still has bare uci -q delete/del_list calls under set -e"
+    exit 1
+  fi
+
   rm -f "$tmp"
   echo "✓ uci-defaults rely on boot-managed cleanup and avoid mountpoint(1) dependencies"
 }

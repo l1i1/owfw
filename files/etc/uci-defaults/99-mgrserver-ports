@@ -30,6 +30,17 @@ run_init_script() {
   "$script" "$@"
 }
 
+uci_delete_quiet() {
+  uci -q delete "$1" >/dev/null 2>&1 || true
+}
+
+uci_del_list_quiet() {
+  local option="$1"
+  local value="$2"
+
+  uci -q del_list "${option}=${value}" >/dev/null 2>&1 || true
+}
+
 rewrite_nginx_listen_value() {
   local entry="$1"
   local first_token=""
@@ -121,22 +132,22 @@ else
 fi
 
 for sec in $UHTTPD_SECTIONS; do
-  uci -q del_list uhttpd."$sec".listen_http="0.0.0.0:80"
-  uci -q del_list uhttpd."$sec".listen_http="[::]:80"
-  uci -q del_list uhttpd."$sec".listen_https="0.0.0.0:443"
-  uci -q del_list uhttpd."$sec".listen_https="[::]:443"
+  uci_del_list_quiet uhttpd."$sec".listen_http "0.0.0.0:80"
+  uci_del_list_quiet uhttpd."$sec".listen_http "[::]:80"
+  uci_del_list_quiet uhttpd."$sec".listen_https "0.0.0.0:443"
+  uci_del_list_quiet uhttpd."$sec".listen_https "[::]:443"
   if [ "$NGINX_ENABLED" = "1" ]; then
-    uci -q del_list uhttpd."$sec".listen_http="0.0.0.0:$LUCI_PORT"
-    uci -q del_list uhttpd."$sec".listen_http="[::]:$LUCI_PORT"
-    uci -q del_list uhttpd."$sec".listen_https="0.0.0.0:$LUCI_PORT"
-    uci -q del_list uhttpd."$sec".listen_https="[::]:$LUCI_PORT"
+    uci_del_list_quiet uhttpd."$sec".listen_http "0.0.0.0:$LUCI_PORT"
+    uci_del_list_quiet uhttpd."$sec".listen_http "[::]:$LUCI_PORT"
+    uci_del_list_quiet uhttpd."$sec".listen_https "0.0.0.0:$LUCI_PORT"
+    uci_del_list_quiet uhttpd."$sec".listen_https "[::]:$LUCI_PORT"
   fi
 done
 
 if [ "$NGINX_ENABLED" != "1" ]; then
   uci set uhttpd."$UHTTPD_SECTION".enabled="1"
-  uci -q delete uhttpd."$UHTTPD_SECTION".listen_http
-  uci -q delete uhttpd."$UHTTPD_SECTION".listen_https
+  uci_delete_quiet uhttpd."$UHTTPD_SECTION".listen_http
+  uci_delete_quiet uhttpd."$UHTTPD_SECTION".listen_https
   uci add_list uhttpd."$UHTTPD_SECTION".listen_http="0.0.0.0:$LUCI_PORT"
   uci add_list uhttpd."$UHTTPD_SECTION".listen_http="[::]:$LUCI_PORT"
   uci add_list uhttpd."$UHTTPD_SECTION".listen_https="0.0.0.0:$LUCI_PORT"
@@ -173,7 +184,7 @@ if [ "$NGINX_ENABLED" = "1" ]; then
 
     if [ "$NGINX_SECTION_CHANGED" = "1" ]; then
       NGINX_CHANGED=1
-      uci -q delete nginx."$section".listen
+      uci_delete_quiet nginx."$section".listen
       while IFS= read -r new_entry; do
         [ -n "$new_entry" ] || continue
         uci add_list nginx."$section".listen="$new_entry"
