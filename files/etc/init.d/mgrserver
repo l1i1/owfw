@@ -1,4 +1,4 @@
-#!/bin/sh /etc/rc.common
+#!/bin/sh /rom/etc/rc.common
 # MgrServer init script for OpenWrt with procd
 # Features: health check, graceful shutdown, status command, logging
 

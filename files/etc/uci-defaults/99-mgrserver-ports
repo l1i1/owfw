@@ -10,6 +10,7 @@ MGR_PORT="80"
 LUCI_PORT="3500"
 SCRIPT_OK="0"
 LOG_TAG="mgrserver-ports"
+RC_COMMON="/rom/etc/rc.common"
 
 cleanup() {
   [ "$SCRIPT_OK" = "1" ] && rm -f "$0"
@@ -19,6 +20,21 @@ trap cleanup EXIT
 
 log_msg() {
   logger -t "$LOG_TAG" "$1" 2>/dev/null || true
+}
+
+run_init_script() {
+  local name="$1"
+  shift
+  local script="/etc/init.d/$name"
+
+  [ -f "$script" ] || return 127
+
+  if [ -f "$RC_COMMON" ]; then
+    /bin/sh "$RC_COMMON" "$script" "$@"
+    return $?
+  fi
+
+  "$script" "$@"
 }
 
 rewrite_nginx_listen_value() {
@@ -59,11 +75,11 @@ rewrite_nginx_listen_value() {
 ensure_mgrserver_started() {
   local attempt
 
-  /etc/init.d/mgrserver enable >/dev/null 2>&1 || true
-  /etc/init.d/mgrserver restart >/dev/null 2>&1 || /etc/init.d/mgrserver start >/dev/null 2>&1
+  run_init_script mgrserver enable >/dev/null 2>&1 || true
+  run_init_script mgrserver restart >/dev/null 2>&1 || run_init_script mgrserver start >/dev/null 2>&1
 
   for attempt in 1 2 3 4 5; do
-    if /etc/init.d/mgrserver health_check >/dev/null 2>&1; then
+    if run_init_script mgrserver health_check >/dev/null 2>&1; then
       log_msg "MgrServer is healthy on port ${MGR_PORT}"
       return 0
     fi
@@ -95,7 +111,7 @@ uci commit mgrserver
 # ============================================================
 
 NGINX_ENABLED=0
-if [ -x /etc/init.d/nginx ] && /etc/init.d/nginx enabled >/dev/null 2>&1; then
+if [ -x /etc/init.d/nginx ] && run_init_script nginx enabled >/dev/null 2>&1; then
   NGINX_ENABLED=1
 fi
 
@@ -135,7 +151,7 @@ if [ "$NGINX_ENABLED" != "1" ]; then
 fi
 
 uci commit uhttpd
-/etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+run_init_script uhttpd restart >/dev/null 2>&1 || true
 
 if [ "$NGINX_ENABLED" = "1" ]; then
   rewrite_nginx_listen_entry() {
@@ -183,7 +199,7 @@ EOF_LISTEN_DST
 
   if [ "$NGINX_CHANGED" = "1" ]; then
     uci commit nginx
-    /etc/init.d/nginx restart >/dev/null 2>&1 || /etc/init.d/nginx start >/dev/null 2>&1
+    run_init_script nginx restart >/dev/null 2>&1 || run_init_script nginx start >/dev/null 2>&1
   fi
 fi
 

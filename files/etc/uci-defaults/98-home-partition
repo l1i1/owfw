@@ -14,6 +14,22 @@ PXE_TARGET='/home/pxe'
 CREATED_PART='0'
 HOME_ON_OVERLAY='0'
 MIN_HOME_PART_MIB='4096'
+RC_COMMON='/rom/etc/rc.common'
+
+run_init_script() {
+    local name="$1"
+    shift
+    local script="/etc/init.d/$name"
+
+    [ -f "$script" ] || return 127
+
+    if [ -f "$RC_COMMON" ]; then
+        /bin/sh "$RC_COMMON" "$script" "$@"
+        return $?
+    fi
+
+    "$script" "$@"
+}
 
 cleanup() {
     rm -f "$0"
@@ -239,7 +255,7 @@ if [ "$HOME_ON_OVERLAY" != '1' ]; then
     uci set fstab.mgrhome.enabled='1'
     uci set fstab.mgrhome.enabled_fsck='0'
     uci commit fstab
-    /etc/init.d/fstab enable >/dev/null 2>&1 || true
+    run_init_script fstab enable >/dev/null 2>&1 || true
 fi
 
 sync_pxe_defaults || true

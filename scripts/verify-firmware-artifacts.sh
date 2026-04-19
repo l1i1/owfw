@@ -954,6 +954,12 @@ verify_mgrserver_health_check() {
     exit 1
   fi
 
+  if ! head -n 1 "$tmp" | grep -Fqx '#!/bin/sh /rom/etc/rc.common'; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/mgrserver is not pinned to /rom/etc/rc.common"
+    exit 1
+  fi
+
   if ! grep -Eq '"ok".*true|jsonfilter[^[:cntrl:]]*ok|json_(load|select|get_var)' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /etc/init.d/mgrserver health checks do not validate the JSON ok=true response"
@@ -995,10 +1001,88 @@ verify_rc_common_selfheal_script() {
   echo "✓ /etc/init.d/rc-common-selfheal fails loudly if merged /etc/rc.common stays missing"
 }
 
+verify_rom_rc_common_runtime_calls() {
+  local tmp=""
+
+  tmp=$(mktemp /tmp/rootfs-ports.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/99-mgrserver-ports" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/99-mgrserver-ports for runtime-call verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'RC_COMMON="/rom/etc/rc.common"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-mgrserver-ports does not pin init-script calls to /rom/etc/rc.common"
+    exit 1
+  fi
+
+  if grep -Eq '(^|[^/])/etc/init\.d/(mgrserver|uhttpd|nginx) (enable|start|restart|health_check|enabled)' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-mgrserver-ports still directly executes init scripts that depend on /etc/rc.common"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+
+  tmp=$(mktemp /tmp/rootfs-watchdog.XXXXXX)
+  if ! extract_rootfs_member "usr/bin/service-watchdog" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /usr/bin/service-watchdog for runtime-call verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'RC_COMMON="/rom/etc/rc.common"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/service-watchdog does not pin init-script calls to /rom/etc/rc.common"
+    exit 1
+  fi
+
+  if grep -Fq '/etc/init.d/mgrserver health_check' "$tmp" || grep -Fq '/etc/init.d/mgrserver restart' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/service-watchdog still directly executes /etc/init.d/mgrserver"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+
+  tmp=$(mktemp /tmp/rootfs-cron.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/99-service-watchdog-cron" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/99-service-watchdog-cron for runtime-call verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'RC_COMMON="/rom/etc/rc.common"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-service-watchdog-cron does not pin cron init-script calls to /rom/etc/rc.common"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+
+  tmp=$(mktemp /tmp/rootfs-home.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/98-home-partition" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/98-home-partition for runtime-call verification"
+    exit 1
+  fi
+
+  if ! grep -Fq "RC_COMMON='/rom/etc/rc.common'" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/98-home-partition does not pin fstab init-script calls to /rom/etc/rc.common"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ custom runtime scripts pin init-script calls to /rom/etc/rc.common when merged /etc/rc.common is absent"
+}
+
 verify_rcs_boot_wrapper
 verify_preinit_overlay_boot_repair
 verify_mgrserver_health_check
 verify_rc_common_selfheal_script
+verify_rom_rc_common_runtime_calls
 
 require_prebuilt_manifest_dependencies "$WORKSPACE_ROOT/prebuilt-ipk-metadata.txt"
 require_rootfs_elf_runtime "usr/bin/sing-box"

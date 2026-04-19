@@ -2,6 +2,23 @@
 # Setup cron job for service watchdog
 # Runs every 5 minutes to check service health
 
+RC_COMMON="/rom/etc/rc.common"
+
+run_init_script() {
+  local name="$1"
+  shift
+  local script="/etc/init.d/$name"
+
+  [ -f "$script" ] || return 127
+
+  if [ -f "$RC_COMMON" ]; then
+    /bin/sh "$RC_COMMON" "$script" "$@"
+    return $?
+  fi
+
+  "$script" "$@"
+}
+
 # Add cron job for service watchdog
 if command -v crontab >/dev/null 2>&1; then
   (crontab -l 2>/dev/null | grep -v "service-watchdog"; echo "*/5 * * * * /usr/bin/service-watchdog") | crontab -
@@ -15,7 +32,7 @@ fi
 
 # Restart cron
 if [ -x /etc/init.d/cron ]; then
-  /etc/init.d/cron restart >/dev/null 2>&1 || /etc/init.d/cron reload >/dev/null 2>&1 || true
+  run_init_script cron restart >/dev/null 2>&1 || run_init_script cron reload >/dev/null 2>&1 || true
 elif command -v crond >/dev/null 2>&1; then
   killall -HUP crond >/dev/null 2>&1 || crond -c /etc/crontabs >/dev/null 2>&1 || true
 fi
