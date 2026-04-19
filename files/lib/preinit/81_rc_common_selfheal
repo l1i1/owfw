@@ -57,7 +57,7 @@ boot_file_needs_overlay_reset() {
 
   case "$rel" in
     etc/inittab)
-      grep -Fqx '::sysinit:/etc/init.d/rcS S boot' "$merged_path" 2>/dev/null || return 0
+      grep -Fqx '::sysinit:/bin/sh /etc/init.d/rcS S boot' "$merged_path" 2>/dev/null || return 0
       return 1
       ;;
   esac
