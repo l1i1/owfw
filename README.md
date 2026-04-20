@@ -64,7 +64,7 @@
 
 ### 系统工具
 
-`curl`, `wget`, `rsync`, `nano`, `ethtool`, `openssh-sftp-server`
+`curl`, `aria2`, `wget`, `rsync`, `nano`, `ethtool`, `openssh-sftp-server`
 
 ## 🚀 编译
 

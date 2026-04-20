@@ -12,7 +12,8 @@ sed -i 's/ImmortalWrt/JDCloud/g' package/base-files/files/bin/config_generate
 
 # Modify default timezone
 echo "Setting timezone to Asia/Shanghai..."
-sed -i 's/UTC/CST-8/g' package/base-files/files/bin/config_generate
+sed -i "s|timezone='UTC'|timezone='CST-8'|g" package/base-files/files/bin/config_generate
+sed -i "s|zonename='UTC'|zonename='Asia/Shanghai'|g" package/base-files/files/bin/config_generate
 sed -i 's|/usr/bin/ntpdate|/usr/sbin/ntpdate|g' package/base-files/files/bin/config_generate 2>/dev/null || true
 
 # Clear root password (ensure empty password)

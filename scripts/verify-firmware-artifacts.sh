@@ -765,6 +765,7 @@ require_rootfs_entry "usr/bin/easytier-core"
 require_rootfs_entry "usr/bin/easytier-cli"
 require_rootfs_entry "usr/bin/easytier-web"
 require_rootfs_entry "usr/bin/wimlib-imagex"
+require_rootfs_entry "usr/bin/aria2c"
 require_rootfs_entry "usr/sbin/mkfs.f2fs"
 require_rootfs_entry "etc/init.d/easytier"
 require_rootfs_entry "etc/config/easytier"
@@ -786,6 +787,7 @@ require_rootfs_executable "etc/uci-defaults/96-ath11k-mac80211-compat"
 require_rootfs_executable "etc/uci-defaults/98-home-partition"
 require_rootfs_executable "etc/uci-defaults/99-mgrserver-ports"
 require_rootfs_executable "etc/uci-defaults/99-service-watchdog-cron"
+require_rootfs_executable "usr/share/mgrserver-defaults/pxe/up_pxe_res.sh"
 
 verify_mac80211_runtime_compat() {
   local rel=""
@@ -893,6 +895,18 @@ verify_preinit_overlay_boot_repair() {
     exit 1
   fi
 
+  if ! grep -Fqx 'boot_hook_add preinit_main do_rc_common_selfheal' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal is not registered on preinit_main after mount_root restore"
+    exit 1
+  fi
+
+  if grep -Fq 'boot_hook_add preinit_mount_root do_rc_common_selfheal' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal still runs on preinit_mount_root before sysupgrade config restore"
+    exit 1
+  fi
+
   if ! grep -Fq 'etc/inittab:0644' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/inittab"
@@ -917,9 +931,27 @@ verify_preinit_overlay_boot_repair() {
     exit 1
   fi
 
+  if ! grep -Fq 'etc/uci-defaults/96-ath11k-mac80211-compat:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/96-ath11k-mac80211-compat"
+    exit 1
+  fi
+
+  if ! grep -Fq 'etc/uci-defaults/98-home-partition:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/98-home-partition"
+    exit 1
+  fi
+
   if ! grep -Fq 'etc/uci-defaults/99-mgrserver-ports:0755' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/99-mgrserver-ports"
+    exit 1
+  fi
+
+  if ! grep -Fq 'etc/uci-defaults/99-service-watchdog-cron:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/99-service-watchdog-cron"
     exit 1
   fi
 
@@ -985,6 +1017,12 @@ verify_rc_common_selfheal_script() {
     exit 1
   fi
 
+  if ! head -n 1 "$tmp" | grep -Fqx '#!/bin/sh /rom/etc/rc.common'; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/init.d/rc-common-selfheal is not pinned to /rom/etc/rc.common"
+    exit 1
+  fi
+
   if grep -Fq 'cp "$ROM_RC_COMMON" /etc/rc.common' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /etc/init.d/rc-common-selfheal still writes directly into merged /etc/rc.common"
@@ -1014,6 +1052,12 @@ verify_uci_defaults_boot_semantics() {
   if grep -Fq 'rm -f "$0"' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /etc/uci-defaults/96-ath11k-mac80211-compat still tries to self-delete via \$0"
+    exit 1
+  fi
+
+  if grep -Fq 'mac80211.sh' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/96-ath11k-mac80211-compat still mutates the runtime mac80211.sh in overlay"
     exit 1
   fi
 
@@ -1065,12 +1109,57 @@ verify_uci_defaults_boot_semantics() {
     exit 1
   fi
 
+  if grep -Fq 'for entry in $LISTENS_RAW' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-mgrserver-ports still splits nginx listen entries on shell whitespace"
+    exit 1
+  fi
+
+  if ! grep -Fq 'config_list_foreach "$section" listen rewrite_nginx_listen_entry' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-mgrserver-ports does not preserve full nginx listen list values"
+    exit 1
+  fi
+
+  if ! grep -Fq 'first_token="${entry%% *}"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-mgrserver-ports does not isolate the nginx listen address token before rewriting"
+    exit 1
+  fi
+
+  if ! grep -Fq 'ensure_mgrserver_started' "$tmp" || ! grep -Fq 'run_init_script mgrserver restart' "$tmp" || ! grep -Fq 'run_init_script mgrserver start' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/99-mgrserver-ports does not start MgrServer during the first boot pass"
+    exit 1
+  fi
+
   rm -f "$tmp"
   echo "✓ uci-defaults rely on boot-managed cleanup and avoid mountpoint(1) dependencies"
 }
 
 verify_rom_rc_common_runtime_calls() {
   local tmp=""
+
+  tmp=$(mktemp /tmp/rootfs-ath11k.XXXXXX)
+  if ! extract_rootfs_member "etc/uci-defaults/96-ath11k-mac80211-compat" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /etc/uci-defaults/96-ath11k-mac80211-compat for runtime-call verification"
+    exit 1
+  fi
+
+  if ! grep -Fq '/bin/sh /rom/etc/rc.common /etc/init.d/rc-common-selfheal enable' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/96-ath11k-mac80211-compat does not enable rc-common-selfheal via /rom/etc/rc.common"
+    exit 1
+  fi
+
+  if grep -Eq '^[[:space:]]*/etc/init\.d/rc-common-selfheal enable' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/96-ath11k-mac80211-compat still directly executes /etc/init.d/rc-common-selfheal"
+    exit 1
+  fi
+
+  rm -f "$tmp"
 
   tmp=$(mktemp /tmp/rootfs-ports.XXXXXX)
   if ! extract_rootfs_member "etc/uci-defaults/99-mgrserver-ports" "$tmp"; then
@@ -1146,12 +1235,45 @@ verify_rom_rc_common_runtime_calls() {
   echo "✓ custom runtime scripts pin init-script calls to /rom/etc/rc.common when merged /etc/rc.common is absent"
 }
 
+verify_pxe_download_engine() {
+  local tmp=""
+
+  tmp=$(mktemp /tmp/rootfs-pxe-updater.XXXXXX)
+  if ! extract_rootfs_member "usr/share/mgrserver-defaults/pxe/up_pxe_res.sh" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract PXE updater for download-engine verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'command -v aria2c >/dev/null 2>&1 || fail "aria2c is required but not installed."' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE updater does not hard-require aria2c"
+    exit 1
+  fi
+
+  if ! grep -Fq 'aria2c \' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE updater does not download through aria2c"
+    exit 1
+  fi
+
+  if grep -Eq '(^|[[:space:]])wget([[:space:]]|$)' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE updater still uses wget for metadata or Boot.iso downloads"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ PXE updater uses aria2c instead of wget for remote downloads"
+}
+
 verify_rcs_boot_wrapper
 verify_preinit_overlay_boot_repair
 verify_mgrserver_health_check
 verify_rc_common_selfheal_script
 verify_uci_defaults_boot_semantics
 verify_rom_rc_common_runtime_calls
+verify_pxe_download_engine
 
 require_prebuilt_manifest_dependencies "$WORKSPACE_ROOT/prebuilt-ipk-metadata.txt"
 require_rootfs_elf_runtime "usr/bin/sing-box"
@@ -1159,6 +1281,7 @@ require_rootfs_elf_runtime "usr/bin/easytier-core"
 require_rootfs_elf_runtime "usr/bin/easytier-cli"
 require_rootfs_elf_runtime "usr/bin/easytier-web"
 require_rootfs_elf_runtime "usr/bin/wimlib-imagex"
+require_rootfs_elf_runtime "usr/bin/aria2c"
 
 FACTORY_HEADER_TMP=$(mktemp -d /tmp/openwrt-factory-header-check.XXXXXX)
 verify_factory_header "$FACTORY" "$SYSUPGRADE" "$FACTORY_HEADER_TMP"

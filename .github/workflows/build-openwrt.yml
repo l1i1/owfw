@@ -66,9 +66,23 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.ccache
-        key: ${{ runner.os }}-openwrt-ccache-${{ github.sha }}
+        key: ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-${{ hashFiles('configs/jdc-ax1800pro.config', 'feeds.conf.default', 'scripts/diy-part1.sh', 'scripts/diy-part2.sh', 'scripts/extract-prebuilt-ipks.sh', '.github/workflows/build-openwrt.yml') }}
         restore-keys: |
+          ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-
           ${{ runner.os }}-openwrt-ccache-
+
+    - name: Clone MgrServer source
+      id: mgrserver_ref
+      env:
+        MGRSERVER_REPO: ${{ github.event.inputs.mgrserver_repo || 'l1i1/MgrServer' }}
+        MGRSERVER_BRANCH: ${{ github.event.inputs.mgrserver_branch || 'main' }}
+      run: |
+        echo "Cloning MgrServer from ${MGRSERVER_REPO}@${MGRSERVER_BRANCH}..."
+        git clone --depth=1 --branch "$MGRSERVER_BRANCH" \
+          "https://x-access-token:${{ secrets.MGRSERVER_TOKEN }}@github.com/${MGRSERVER_REPO}.git" "$GITHUB_WORKSPACE/mgrserver-src"
+        echo "repo=${MGRSERVER_REPO}" >> "$GITHUB_OUTPUT"
+        echo "branch=${MGRSERVER_BRANCH}" >> "$GITHUB_OUTPUT"
+        echo "commit=$(git -C "$GITHUB_WORKSPACE/mgrserver-src" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
     # ================================================================
     # MgrServer: build and stage into files overlay
@@ -77,21 +91,17 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
+        cache: 'pnpm'
+        cache-dependency-path: |
+          mgrserver-src/pnpm-lock.yaml
 
     - name: Setup pnpm
       uses: pnpm/action-setup@v4
       with:
         version: 10
 
-    - name: Clone and build MgrServer
-      env:
-        MGRSERVER_REPO: ${{ github.event.inputs.mgrserver_repo || 'l1i1/MgrServer' }}
-        MGRSERVER_BRANCH: ${{ github.event.inputs.mgrserver_branch || 'main' }}
+    - name: Build MgrServer
       run: |
-        echo "Cloning MgrServer from ${MGRSERVER_REPO}@${MGRSERVER_BRANCH}..."
-        git clone --depth=1 --branch "$MGRSERVER_BRANCH" \
-          "https://x-access-token:${{ secrets.MGRSERVER_TOKEN }}@github.com/${MGRSERVER_REPO}.git" "$GITHUB_WORKSPACE/mgrserver-src"
-
         cd "$GITHUB_WORKSPACE/mgrserver-src"
         echo "Installing dependencies..."
         pnpm install --frozen-lockfile
@@ -167,7 +177,8 @@ jobs:
 
     # ================================================================
     # Prebuilt IPKs: extract into files/ to bake into firmware
-    # Avoids compiling Rust binaries (EasyTier) and Go binaries (sing-box) from source
+    # Avoids compiling Rust binaries (EasyTier), Go binaries (sing-box),
+    # and the PXE download engine (aria2) from source
     # IPK format: tar.gz containing data.tar.gz (which contains actual files)
     # ================================================================
     - name: Extract prebuilt IPKs into files overlay
@@ -202,15 +213,29 @@ jobs:
         ccache --max-size=15G
         ccache -z
         echo "CCACHE_DIR=\$HOME/.ccache" >> $GITHUB_ENV
+        echo "CCACHE_BASEDIR=/workdir/openwrt" >> $GITHUB_ENV
         echo "USE_CCACHE=1" >> $GITHUB_ENV
         echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
+        echo "CCACHE_NOHASHDIR=1" >> $GITHUB_ENV
 
     - name: Clone source code
+      id: openwrt_ref
       working-directory: /workdir
       run: |
         df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
+        echo "commit=$(git -C openwrt rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: Restore feeds cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          openwrt/feeds
+        key: ${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'scripts/diy-part1.sh', '.github/workflows/build-openwrt.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-
+          ${{ runner.os }}-openwrt-feeds-
 
     - name: Load custom feeds
       run: |
@@ -237,6 +262,33 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
+    - name: Prepare build configuration
+      run: |
+        cd openwrt
+        make defconfig
+
+    - name: Restore source download cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          openwrt/dl
+        key: ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-${{ hashFiles('configs/jdc-ax1800pro.config', 'feeds.conf.default', 'scripts/diy-part1.sh', 'scripts/diy-part2.sh', 'package/**', '.github/workflows/build-openwrt.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-
+          ${{ runner.os }}-openwrt-dl-
+
+    - name: Restore toolchain cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          openwrt/staging_dir/host
+          openwrt/staging_dir/hostpkg
+          openwrt/staging_dir/toolchain-*
+          openwrt/build_dir/host
+          openwrt/build_dir/hostpkg
+          openwrt/build_dir/toolchain-*
+        key: ${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-${{ hashFiles('configs/jdc-ax1800pro.config', 'feeds.conf.default', 'scripts/diy-part1.sh', 'scripts/diy-part2.sh', '.github/workflows/build-openwrt.yml') }}
+
     - name: SSH connection to Actions
       uses: P3TERX/ssh2actions@v1.0.0
       if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
@@ -248,7 +300,6 @@ jobs:
       id: package
       run: |
         cd openwrt
-        make defconfig
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
@@ -279,12 +330,23 @@ jobs:
         require_config "CONFIG_PACKAGE_hostapd-utils=y"
         require_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
 
+    - name: Warm tools and toolchain cache
+      run: |
+        cd openwrt
+        echo "Building host tools and toolchain incrementally..."
+        make tools/install -j"$(nproc)" || make tools/install -j1 V=s
+        make toolchain/install -j"$(nproc)" || make toolchain/install -j1 V=s
+
     - name: Compile the firmware
       id: compile
       run: |
         cd openwrt
+        echo "ccache stats before compile:"
+        ccache -s || true
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "ccache stats after compile:"
+        ccache -s || true
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
@@ -337,6 +399,7 @@ jobs:
         echo "- MgrServer (路由器管理后台, 端口 80)" >> release.txt
         echo "- Node.js 22.x + npm" >> release.txt
         echo "- Python3 (25 子包)" >> release.txt
+        echo "- aria2 (预编译 IPK，用于 PXE 资源下载)" >> release.txt
         echo "- sing-box (预编译 IPK，已校验 kmod-tun / kmod-inet-diag / kmod-nft-queue)" >> release.txt
         echo "- easytier v2.5.0 + luci-app-easytier (预编译 IPK，已校验 kmod-tun / luci-compat)" >> release.txt
         if [ "${HAS_QCA_NSS_DP:-false}" = "true" ]; then
