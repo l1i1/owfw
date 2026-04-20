@@ -221,7 +221,7 @@ echo "=== MgrServer ==="
 check_binary "node" "/usr/bin/node"
 check_dir "MgrServer app" "$MGR_APP_DIR" "required"
 check_process "mgrserver" "/var/run/mgrserver.pid"
-check_http "MgrServer" "http://127.0.0.1:${MGR_PORT}/health" 5
+check_http "MgrServer" "http://127.0.0.1:${MGR_PORT}/api/health" 5
 
 echo ""
 echo "=== Network Services ==="

@@ -122,11 +122,24 @@ require_build_config "CONFIG_PACKAGE_kmod-tun=y"
 require_build_config "CONFIG_PACKAGE_kmod-inet-diag=y"
 require_build_config "CONFIG_PACKAGE_kmod-nft-queue=y"
 require_build_config "CONFIG_PACKAGE_luci-compat=y"
+require_build_config "CONFIG_PACKAGE_dnsmasq-full=y"
+require_build_config "CONFIG_PACKAGE_uhttpd=y"
+require_build_config "CONFIG_PACKAGE_ip-full=y"
+require_build_config "CONFIG_PACKAGE_iw=y"
 require_build_config "CONFIG_PACKAGE_parted=y"
+require_build_config "CONFIG_PACKAGE_e2fsprogs=y"
+require_build_config "CONFIG_PACKAGE_blkid=y"
+require_build_config "CONFIG_PACKAGE_block-mount=y"
 require_build_config "CONFIG_PACKAGE_f2fs-tools=y"
+require_build_config "CONFIG_PACKAGE_kmod-fs-ext4=y"
 require_build_config "CONFIG_PACKAGE_kmod-fs-f2fs=y"
+require_build_config "CONFIG_PACKAGE_kmod-fs-udf=y"
+require_build_config "CONFIG_PACKAGE_kmod-cdrom=y"
 require_build_config "CONFIG_PACKAGE_hostapd-utils=y"
 require_build_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
+require_build_config "CONFIG_PACKAGE_curl=y"
+require_build_config "CONFIG_PACKAGE_wget=y"
+require_build_config "CONFIG_PACKAGE_openssh-sftp-server=y"
 
 require_manifest_pkg "node127"
 require_manifest_pkg "node-npm"
@@ -136,12 +149,25 @@ require_manifest_pkg "kmod-tun"
 require_manifest_pkg "kmod-inet-diag"
 require_manifest_pkg "kmod-nft-queue"
 require_manifest_pkg "luci-compat"
+require_manifest_pkg "dnsmasq-full"
+require_manifest_pkg "uhttpd"
+require_manifest_pkg "ip-full"
+require_manifest_pkg "iw"
 require_manifest_pkg "parted"
+require_manifest_pkg "e2fsprogs"
+require_manifest_pkg "blkid"
+require_manifest_pkg "block-mount"
 require_manifest_pkg "f2fs-tools"
+require_manifest_pkg "kmod-fs-ext4"
 require_manifest_pkg "kmod-fs-f2fs"
+require_manifest_pkg "kmod-fs-udf"
+require_manifest_pkg "kmod-cdrom"
 require_manifest_pkg "hostapd-utils"
 require_manifest_pkg "miniupnpd-nftables"
 require_manifest_pkg "wimlib"
+require_manifest_pkg "curl"
+require_manifest_pkg "wget"
+require_manifest_pkg "openssh-sftp-server"
 
 if grep -q '^kmod-qca-nss-dp - ' "$MANIFEST"; then
   if [ -n "${GITHUB_ENV:-}" ]; then
@@ -751,6 +777,12 @@ echo "Primary rootfs squashfs sha256: $PRIMARY_ROOTFS_SHA256"
 require_rootfs_entry "etc/init.d/mgrserver"
 require_rootfs_entry "etc/init.d/rc-common-selfheal"
 require_rootfs_entry "etc/init.d/rcS"
+require_rootfs_entry "etc/init.d/network"
+require_rootfs_entry "etc/init.d/firewall"
+require_rootfs_entry "etc/init.d/dnsmasq"
+require_rootfs_entry "etc/init.d/uhttpd"
+require_rootfs_entry "etc/init.d/cron"
+require_rootfs_entry "etc/crontabs"
 require_rootfs_entry "usr/bin/health-check"
 require_rootfs_entry "usr/bin/service-watchdog"
 require_rootfs_entry "etc/uci-defaults/96-ath11k-mac80211-compat"
@@ -778,11 +810,24 @@ require_rootfs_entry "root/mgrserver/commands.json"
 require_rootfs_entry "root/mgrserver/web-dist/index.html"
 require_rootfs_entry "usr/bin/node"
 require_rootfs_entry "usr/bin/npm"
+require_rootfs_any "curl binary" "usr/bin/curl" "bin/curl"
+require_rootfs_any "wget binary" "usr/bin/wget" "bin/wget"
+require_rootfs_any "ip binary" "usr/sbin/ip" "sbin/ip"
+require_rootfs_any "iw binary" "usr/sbin/iw" "sbin/iw"
+require_rootfs_any "blkid binary" "usr/sbin/blkid" "sbin/blkid"
+require_rootfs_any "mkfs.ext4 binary" "usr/sbin/mkfs.ext4" "sbin/mkfs.ext4"
+require_rootfs_any "iptables binary" "usr/sbin/iptables" "sbin/iptables" "usr/bin/iptables"
+require_rootfs_any "crond binary" "usr/sbin/crond" "sbin/crond" "bin/crond"
 require_rootfs_any "MgrServer server entry" "root/mgrserver/dist/index.js" "root/mgrserver/bundle/index.cjs"
 require_rootfs_any "wimlib shared library" "usr/lib/libwim.so" "usr/lib/libwim.so.15"
 require_rootfs_executable "etc/init.d/mgrserver"
 require_rootfs_executable "etc/init.d/rc-common-selfheal"
 require_rootfs_executable "etc/init.d/rcS"
+require_rootfs_executable "etc/init.d/network"
+require_rootfs_executable "etc/init.d/firewall"
+require_rootfs_executable "etc/init.d/dnsmasq"
+require_rootfs_executable "etc/init.d/uhttpd"
+require_rootfs_executable "etc/init.d/cron"
 require_rootfs_executable "etc/uci-defaults/96-ath11k-mac80211-compat"
 require_rootfs_executable "etc/uci-defaults/98-home-partition"
 require_rootfs_executable "etc/uci-defaults/99-mgrserver-ports"
@@ -1000,6 +1045,37 @@ verify_mgrserver_health_check() {
 
   rm -f "$tmp"
   echo "✓ /etc/init.d/mgrserver uses the expected /api/health JSON health check"
+}
+
+verify_health_check_script() {
+  local tmp=""
+
+  if ! rootfs_has_entry "usr/bin/health-check"; then
+    echo "✗ ERROR: missing /usr/bin/health-check in verified rootfs"
+    exit 1
+  fi
+
+  tmp=$(mktemp /tmp/rootfs-health-check.XXXXXX)
+  if ! extract_rootfs_member "usr/bin/health-check" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract /usr/bin/health-check for verification"
+    exit 1
+  fi
+
+  if ! grep -Fq 'http://127.0.0.1:${MGR_PORT}/api/health' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/health-check does not target /api/health"
+    exit 1
+  fi
+
+  if grep -Fq 'http://127.0.0.1:${MGR_PORT}/health' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /usr/bin/health-check still targets the stale /health endpoint"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ /usr/bin/health-check targets the expected /api/health endpoint"
 }
 
 verify_rc_common_selfheal_script() {
@@ -1270,6 +1346,7 @@ verify_pxe_download_engine() {
 verify_rcs_boot_wrapper
 verify_preinit_overlay_boot_repair
 verify_mgrserver_health_check
+verify_health_check_script
 verify_rc_common_selfheal_script
 verify_uci_defaults_boot_semantics
 verify_rom_rc_common_runtime_calls
