@@ -92,6 +92,17 @@ require_build_config() {
   fi
 }
 
+warn_build_config_if_missing() {
+  local pattern="$1"
+  local reason="$2"
+  if grep -qx "$pattern" "$CONFIG_BUILDINFO"; then
+    echo "✓ build config present: $pattern"
+  else
+    echo "⚠ build config not recorded: $pattern"
+    echo "  note: $reason"
+  fi
+}
+
 require_manifest_pkg() {
   local pkg="$1"
   if grep -q "^${pkg} - " "$MANIFEST"; then
@@ -122,7 +133,11 @@ require_build_config "CONFIG_PACKAGE_kmod-tun=y"
 require_build_config "CONFIG_PACKAGE_kmod-inet-diag=y"
 require_build_config "CONFIG_PACKAGE_kmod-nft-queue=y"
 require_build_config "CONFIG_PACKAGE_luci-compat=y"
-require_build_config "CONFIG_PACKAGE_dnsmasq-full=y"
+# dnsmasq-full is still hard-required below via manifest + rootfs checks.
+# On OpenWrt master, config.buildinfo may omit the explicit package symbol for
+# provider/default-variant resolution even when dnsmasq-full is actually baked in.
+warn_build_config_if_missing "CONFIG_PACKAGE_dnsmasq-full=y" \
+  "falling back to manifest/rootfs verification for dnsmasq-full"
 require_build_config "CONFIG_PACKAGE_uhttpd=y"
 require_build_config "CONFIG_PACKAGE_ip-full=y"
 require_build_config "CONFIG_PACKAGE_iw=y"
