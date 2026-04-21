@@ -140,7 +140,10 @@ warn_build_config_if_missing "CONFIG_PACKAGE_dnsmasq-full=y" \
   "falling back to manifest/rootfs verification for dnsmasq-full"
 require_build_config "CONFIG_PACKAGE_uhttpd=y"
 require_build_config "CONFIG_PACKAGE_ip-full=y"
-require_build_config "CONFIG_PACKAGE_iw=y"
+# iw is also verified below via manifest + rootfs checks. On OpenWrt master,
+# config.buildinfo may omit the explicit package symbol even when iw is baked in.
+warn_build_config_if_missing "CONFIG_PACKAGE_iw=y" \
+  "falling back to manifest/rootfs verification for iw"
 require_build_config "CONFIG_PACKAGE_parted=y"
 require_build_config "CONFIG_PACKAGE_e2fsprogs=y"
 require_build_config "CONFIG_PACKAGE_blkid=y"
