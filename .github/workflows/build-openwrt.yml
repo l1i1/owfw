@@ -326,6 +326,46 @@ jobs:
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a
 
+    - name: Compute resolved feed fingerprint
+      id: resolved_feeds
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd openwrt
+
+        tmp="$(mktemp)"
+        while IFS= read -r feed; do
+          if git -C "feeds/$feed" rev-parse HEAD >/dev/null 2>&1; then
+            printf '%s %s\n' "$feed" "$(git -C "feeds/$feed" rev-parse HEAD)" >> "$tmp"
+          fi
+        done < <(find feeds -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+
+        if [ ! -s "$tmp" ]; then
+          echo "No feed revisions found after update." >&2
+          rm -f "$tmp"
+          exit 1
+        fi
+
+        feed_revision_hash="$(sha256sum "$tmp" | awk '{print $1}')"
+
+        {
+          echo "feed_revision_hash=$feed_revision_hash"
+          echo "feed_revisions<<EOF"
+          cat "$tmp"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        rm -f "$tmp"
+
+    - name: Show target/package cache plan
+      run: |
+        echo "Resolved feed revisions:"
+        printf '%s\n' "${{ steps.resolved_feeds.outputs.feed_revisions }}"
+        echo "Resolved fingerprints:"
+        echo "  feed_revision_hash=${{ steps.resolved_feeds.outputs.feed_revision_hash }}"
+        echo "Target/package cache key:"
+        echo "  target_package=${{ runner.os }}-openwrt-target-package-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.package_selection_hash }}-${{ steps.cache_fingerprint.outputs.package_tree_hash }}-${{ steps.resolved_feeds.outputs.feed_revision_hash }}"
+
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
@@ -369,6 +409,46 @@ jobs:
           openwrt/build_dir/hostpkg
           openwrt/build_dir/toolchain-*
         key: ${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.toolchain_hash }}
+
+    - name: Restore target/package cache
+      id: target_package_cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.cache/openwrt-target-package
+        key: ${{ runner.os }}-openwrt-target-package-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.package_selection_hash }}-${{ steps.cache_fingerprint.outputs.package_tree_hash }}-${{ steps.resolved_feeds.outputs.feed_revision_hash }}
+
+    - name: Hydrate target/package cache
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        CACHE_ROOT="$GITHUB_WORKSPACE/.cache/openwrt-target-package"
+        OPENWRT_ROOT="$GITHUB_WORKSPACE/openwrt"
+
+        if [ ! -d "$CACHE_ROOT" ]; then
+          echo "No target/package cache staging directory restored."
+          exit 0
+        fi
+
+        echo "Hydrating curated target/package cache into build tree..."
+
+        if [ -d "$CACHE_ROOT/bin/packages" ]; then
+          mkdir -p "$OPENWRT_ROOT/bin/packages"
+          rsync -a "$CACHE_ROOT/bin/packages/" "$OPENWRT_ROOT/bin/packages/"
+        fi
+
+        if [ -d "$CACHE_ROOT/staging_dir" ]; then
+          mkdir -p "$OPENWRT_ROOT/staging_dir"
+          rsync -a "$CACHE_ROOT/staging_dir/" "$OPENWRT_ROOT/staging_dir/"
+        fi
+
+        if [ -d "$CACHE_ROOT/build_dir" ]; then
+          mkdir -p "$OPENWRT_ROOT/build_dir"
+          rsync -a "$CACHE_ROOT/build_dir/" "$OPENWRT_ROOT/build_dir/"
+        fi
+
+        echo "Hydrated target/package cache contents:"
+        du -sh "$CACHE_ROOT" || true
 
     - name: SSH connection to Actions
       uses: P3TERX/ssh2actions@v1.0.0
@@ -438,6 +518,50 @@ jobs:
     - name: Check space usage
       if: (!cancelled())
       run: df -hT
+
+    - name: Refresh target/package cache snapshot
+      if: steps.compile.outputs.status == 'success' && !cancelled()
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        CACHE_ROOT="$GITHUB_WORKSPACE/.cache/openwrt-target-package"
+        OPENWRT_ROOT="$GITHUB_WORKSPACE/openwrt"
+
+        rm -rf "$CACHE_ROOT"
+        mkdir -p "$CACHE_ROOT/build_dir" "$CACHE_ROOT/staging_dir" "$CACHE_ROOT/bin"
+
+        shopt -s nullglob
+
+        for target_dir in "$OPENWRT_ROOT"/staging_dir/target-*; do
+          base="$(basename "$target_dir")"
+          mkdir -p "$CACHE_ROOT/staging_dir/$base"
+          rsync -a --delete --exclude 'root-*' "$target_dir"/ "$CACHE_ROOT/staging_dir/$base"/
+        done
+
+        for target_dir in "$OPENWRT_ROOT"/build_dir/target-*; do
+          [ -d "$target_dir" ] || continue
+          base="$(basename "$target_dir")"
+          mkdir -p "$CACHE_ROOT/build_dir/$base"
+
+          for entry in "$target_dir"/*; do
+            [ -d "$entry" ] || continue
+            name="$(basename "$entry")"
+            case "$name" in
+              linux-*) continue ;;
+            esac
+            mkdir -p "$CACHE_ROOT/build_dir/$base/$name"
+            rsync -a --delete "$entry"/ "$CACHE_ROOT/build_dir/$base/$name"/
+          done
+        done
+
+        if [ -d "$OPENWRT_ROOT/bin/packages" ]; then
+          mkdir -p "$CACHE_ROOT/bin/packages"
+          rsync -a --delete "$OPENWRT_ROOT/bin/packages/" "$CACHE_ROOT/bin/packages/"
+        fi
+
+        echo "Prepared target/package cache snapshot:"
+        du -sh "$CACHE_ROOT" || true
 
     - name: Organize files
       id: organize
