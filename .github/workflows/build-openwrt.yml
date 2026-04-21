@@ -61,12 +61,63 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
+    - name: Compute cache fingerprints
+      id: cache_fingerprint
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        hash_file_list() {
+          if [ "$#" -eq 0 ]; then
+            printf 'none'
+            return 0
+          fi
+
+          local tmp
+          local path
+
+          tmp="$(mktemp)"
+          : > "$tmp"
+
+          for path in "$@"; do
+            printf '%s\0' "$path" >> "$tmp"
+            cat "$path" >> "$tmp"
+            printf '\0' >> "$tmp"
+          done
+
+          sha256sum "$tmp" | awk '{print $1}'
+          rm -f "$tmp"
+        }
+
+        mapfile -t package_files < <(git ls-files 'package/**')
+
+        toolchain_config_hash="$(
+          grep -E '^(CONFIG_TARGET|CONFIG_TARGET_|CONFIG_TARGET_.*DEVICE_|CONFIG_ARCH|CONFIG_CPU_TYPE|CONFIG_CPU_SUBTYPE|CONFIG_USE_MUSL|CONFIG_USE_GLIBC|CONFIG_USE_UCLIBC|CONFIG_LIBC_|CONFIG_EXTERNAL_TOOLCHAIN|CONFIG_GCC_|CONFIG_BINUTILS_)' \
+            configs/jdc-ax1800pro.config \
+            | sort \
+            | sha256sum \
+            | awk '{print $1}'
+        )"
+
+        feeds_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
+        dl_hash="$(hash_file_list configs/jdc-ax1800pro.config feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh scripts/extract-prebuilt-ipks.sh "${package_files[@]}")"
+        ccache_hash="$(hash_file_list configs/jdc-ax1800pro.config feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh scripts/extract-prebuilt-ipks.sh "${package_files[@]}")"
+        toolchain_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
+
+        {
+          echo "toolchain_config_hash=$toolchain_config_hash"
+          echo "feeds_hash=$feeds_hash"
+          echo "dl_hash=$dl_hash"
+          echo "ccache_hash=$ccache_hash"
+          echo "toolchain_hash=$toolchain_hash"
+        } >> "$GITHUB_OUTPUT"
+
     # 配置 ccache 缓存以加速编译
     - name: Setup ccache cache
       uses: actions/cache@v4
       with:
         path: ~/.ccache
-        key: ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-${{ hashFiles('configs/jdc-ax1800pro.config', 'feeds.conf.default', 'scripts/diy-part1.sh', 'scripts/diy-part2.sh', 'scripts/extract-prebuilt-ipks.sh', '.github/workflows/build-openwrt.yml') }}
+        key: ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.ccache_hash }}
         restore-keys: |
           ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-
           ${{ runner.os }}-openwrt-ccache-
@@ -233,7 +284,7 @@ jobs:
       with:
         path: |
           openwrt/feeds
-        key: ${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'scripts/diy-part1.sh', '.github/workflows/build-openwrt.yml') }}
+        key: ${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.feeds_hash }}
         restore-keys: |
           ${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-
           ${{ runner.os }}-openwrt-feeds-
@@ -273,7 +324,7 @@ jobs:
       with:
         path: |
           openwrt/dl
-        key: ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-${{ hashFiles('configs/jdc-ax1800pro.config', 'feeds.conf.default', 'scripts/diy-part1.sh', 'scripts/diy-part2.sh', 'package/**', '.github/workflows/build-openwrt.yml') }}
+        key: ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.dl_hash }}
         restore-keys: |
           ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-
           ${{ runner.os }}-openwrt-dl-
@@ -288,7 +339,7 @@ jobs:
           openwrt/build_dir/host
           openwrt/build_dir/hostpkg
           openwrt/build_dir/toolchain-*
-        key: ${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-${{ hashFiles('configs/jdc-ax1800pro.config', 'feeds.conf.default', 'scripts/diy-part1.sh', 'scripts/diy-part2.sh', '.github/workflows/build-openwrt.yml') }}
+        key: ${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.toolchain_hash }}
 
     - name: SSH connection to Actions
       uses: P3TERX/ssh2actions@v1.0.0
