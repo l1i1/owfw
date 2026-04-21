@@ -113,7 +113,11 @@ jobs:
 
           feeds_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
           dl_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh "${package_files[@]}")"
-          ccache_hash="$(hash_file_list configs/jdc-ax1800pro.config feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh scripts/extract-prebuilt-ipks.sh scripts/clear-mgrserver-runtime-overlay.sh scripts/stage-mgrserver-overlay.sh "${package_files[@]}")"
+          ccache_scope_hash="$(
+            printf '%s\n' "${toolchain_config_hash}" "${package_selection_hash}" \
+              | sha256sum \
+              | awk '{print $1}'
+          )"
           toolchain_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
 
           {
@@ -122,7 +126,7 @@ jobs:
             echo "toolchain_config_hash=$toolchain_config_hash"
             echo "feeds_hash=$feeds_hash"
             echo "dl_hash=$dl_hash"
-            echo "ccache_hash=$ccache_hash"
+            echo "ccache_scope_hash=$ccache_scope_hash"
             echo "toolchain_hash=$toolchain_hash"
           } >> "$GITHUB_OUTPUT"
 
@@ -130,10 +134,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.ccache_hash }}
+          key: ${{ runner.os }}-openwrt-ccache-v2-${{ steps.cache_fingerprint.outputs.ccache_scope_hash }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-
-            ${{ runner.os }}-openwrt-ccache-
+            ${{ runner.os }}-openwrt-ccache-v2-
 
       - name: Initialization environment
         env:
@@ -186,11 +189,11 @@ jobs:
           echo "  toolchain_config_hash=${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}"
           echo "  feeds_hash=${{ steps.cache_fingerprint.outputs.feeds_hash }}"
           echo "  dl_hash=${{ steps.cache_fingerprint.outputs.dl_hash }}"
-          echo "  ccache_hash=${{ steps.cache_fingerprint.outputs.ccache_hash }}"
+          echo "  ccache_scope_hash=${{ steps.cache_fingerprint.outputs.ccache_scope_hash }}"
           echo "  toolchain_hash=${{ steps.cache_fingerprint.outputs.toolchain_hash }}"
           echo "OpenWrt source commit: ${{ steps.openwrt_ref.outputs.commit }}"
           echo "Cache keys:"
-          echo "  ccache=${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.ccache_hash }}"
+          echo "  ccache=${{ runner.os }}-openwrt-ccache-v2-${{ steps.cache_fingerprint.outputs.ccache_scope_hash }}"
           echo "  feeds=${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.feeds_hash }}"
           echo "  dl=${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.package_selection_hash }}-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.dl_hash }}"
           echo "  toolchain=${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.toolchain_hash }}"
@@ -460,6 +463,27 @@ jobs:
           echo "Prepared target/package cache snapshot:"
           du -sh "$CACHE_ROOT" || true
 
+      - name: Prepare base build handoff artifact
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HANDOFF_ROOT="$GITHUB_WORKSPACE/.artifact-handoff/base-build"
+          rm -rf "$HANDOFF_ROOT"
+          mkdir -p "$HANDOFF_ROOT/target-package" "$HANDOFF_ROOT/dl"
+
+          if [ -d "$GITHUB_WORKSPACE/.cache/openwrt-target-package" ]; then
+            rsync -a "$GITHUB_WORKSPACE/.cache/openwrt-target-package/" "$HANDOFF_ROOT/target-package/"
+          fi
+
+          if [ -d "$GITHUB_WORKSPACE/openwrt/dl" ]; then
+            rsync -a "$GITHUB_WORKSPACE/openwrt/dl/" "$HANDOFF_ROOT/dl/"
+          fi
+
+          echo "Prepared base build handoff artifact:"
+          du -sh "$HANDOFF_ROOT" || true
+
       - name: Organize base files
         id: organize
         if: steps.compile.outputs.status == 'success' && !cancelled()
@@ -478,6 +502,14 @@ jobs:
           name: OpenWrt_base_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
           path: ${{ env.BASE_FIRMWARE }}
           retention-days: 3
+
+      - name: Upload base build handoff artifact
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        with:
+          name: openwrt-base-build-handoff
+          path: ${{ github.workspace }}/.artifact-handoff/base-build
+          retention-days: 1
 
   build_overlay:
     name: Build MgrServer Overlay Firmware
@@ -558,7 +590,11 @@ jobs:
 
           feeds_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
           dl_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh "${package_files[@]}")"
-          ccache_hash="$(hash_file_list configs/jdc-ax1800pro.config feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh scripts/extract-prebuilt-ipks.sh scripts/clear-mgrserver-runtime-overlay.sh scripts/stage-mgrserver-overlay.sh "${package_files[@]}")"
+          ccache_scope_hash="$(
+            printf '%s\n' "${toolchain_config_hash}" "${package_selection_hash}" \
+              | sha256sum \
+              | awk '{print $1}'
+          )"
           toolchain_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
 
           {
@@ -567,7 +603,7 @@ jobs:
             echo "toolchain_config_hash=$toolchain_config_hash"
             echo "feeds_hash=$feeds_hash"
             echo "dl_hash=$dl_hash"
-            echo "ccache_hash=$ccache_hash"
+            echo "ccache_scope_hash=$ccache_scope_hash"
             echo "toolchain_hash=$toolchain_hash"
           } >> "$GITHUB_OUTPUT"
 
@@ -575,10 +611,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.ccache_hash }}
+          key: ${{ runner.os }}-openwrt-ccache-v2-${{ steps.cache_fingerprint.outputs.ccache_scope_hash }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-
-            ${{ runner.os }}-openwrt-ccache-
+            ${{ runner.os }}-openwrt-ccache-v2-
 
       - name: Clone MgrServer source
         id: mgrserver_ref
@@ -661,6 +696,12 @@ jobs:
           echo "commit=$actual_commit" >> "$GITHUB_OUTPUT"
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
+      - name: Download base build handoff artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openwrt-base-build-handoff
+          path: ${{ github.workspace }}/.artifact-handoff/base-build
+
       - name: Show cache plan
         run: |
           echo "Build role: mgrserver-overlay"
@@ -671,11 +712,11 @@ jobs:
           echo "  toolchain_config_hash=${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}"
           echo "  feeds_hash=${{ steps.cache_fingerprint.outputs.feeds_hash }}"
           echo "  dl_hash=${{ steps.cache_fingerprint.outputs.dl_hash }}"
-          echo "  ccache_hash=${{ steps.cache_fingerprint.outputs.ccache_hash }}"
+          echo "  ccache_scope_hash=${{ steps.cache_fingerprint.outputs.ccache_scope_hash }}"
           echo "  toolchain_hash=${{ steps.cache_fingerprint.outputs.toolchain_hash }}"
           echo "OpenWrt source commit: ${{ steps.openwrt_ref.outputs.commit }}"
           echo "Cache keys:"
-          echo "  ccache=${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.ccache_hash }}"
+          echo "  ccache=${{ runner.os }}-openwrt-ccache-v2-${{ steps.cache_fingerprint.outputs.ccache_scope_hash }}"
           echo "  feeds=${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.feeds_hash }}"
           echo "  dl=${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.package_selection_hash }}-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.dl_hash }}"
           echo "  toolchain=${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.toolchain_hash }}"
@@ -786,6 +827,25 @@ jobs:
             ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-
             ${{ runner.os }}-openwrt-dl-
 
+      - name: Apply base build dl artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HANDOFF_DL="$GITHUB_WORKSPACE/.artifact-handoff/base-build/dl"
+          OPENWRT_DL="$GITHUB_WORKSPACE/openwrt/dl"
+
+          if [ ! -d "$HANDOFF_DL" ]; then
+            echo "No base build dl artifact found."
+            exit 0
+          fi
+
+          mkdir -p "$OPENWRT_DL"
+          rsync -a "$HANDOFF_DL/" "$OPENWRT_DL/"
+
+          echo "Applied base build dl artifact:"
+          du -sh "$HANDOFF_DL" || true
+
       - name: Restore toolchain cache
         uses: actions/cache@v4
         with:
@@ -804,6 +864,25 @@ jobs:
         with:
           path: ${{ github.workspace }}/.cache/openwrt-target-package
           key: ${{ runner.os }}-openwrt-target-package-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.package_selection_hash }}-${{ steps.cache_fingerprint.outputs.package_tree_hash }}-${{ steps.resolved_feeds.outputs.feed_revision_hash }}
+
+      - name: Apply base build target/package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HANDOFF_TARGET="$GITHUB_WORKSPACE/.artifact-handoff/base-build/target-package"
+          CACHE_ROOT="$GITHUB_WORKSPACE/.cache/openwrt-target-package"
+
+          if [ ! -d "$HANDOFF_TARGET" ]; then
+            echo "No base build target/package artifact found."
+            exit 0
+          fi
+
+          mkdir -p "$CACHE_ROOT"
+          rsync -a "$HANDOFF_TARGET/" "$CACHE_ROOT/"
+
+          echo "Applied base build target/package artifact:"
+          du -sh "$HANDOFF_TARGET" || true
 
       - name: Hydrate target/package cache
         shell: bash
