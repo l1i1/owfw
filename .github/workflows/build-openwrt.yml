@@ -130,8 +130,6 @@ jobs:
           FORCE_BASE_REBUILD: ${{ github.event.inputs.force_base_rebuild || github.event.client_payload.force_base_rebuild || 'false' }}
         with:
           script: |
-            const core = require("@actions/core");
-
             const fingerprint = process.env.BASE_BUILD_FINGERPRINT;
             const force = String(process.env.FORCE_BASE_REBUILD || "false").toLowerCase() === "true";
             const prefix = `openwrt-base-build-handoff-${fingerprint}-`;
