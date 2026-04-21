@@ -91,6 +91,14 @@ jobs:
 
         mapfile -t package_files < <(git ls-files 'package/**')
 
+        package_tree_hash="$(hash_file_list "${package_files[@]}")"
+        package_selection_hash="$(
+          grep -E '^(CONFIG_PACKAGE_|CONFIG_NODEJS_|CONFIG_ARIA2_|CONFIG_TARGET_ROOTFS_|CONFIG_TARGET_IMAGES_|CONFIG_SIGNED_PACKAGES|CONFIG_ALL_|CONFIG_IB|CONFIG_SDK|CONFIG_DEVEL)' \
+            configs/jdc-ax1800pro.config \
+            | sort \
+            | sha256sum \
+            | awk '{print $1}'
+        )"
         toolchain_config_hash="$(
           grep -E '^(CONFIG_TARGET|CONFIG_TARGET_|CONFIG_TARGET_.*DEVICE_|CONFIG_ARCH|CONFIG_CPU_TYPE|CONFIG_CPU_SUBTYPE|CONFIG_USE_MUSL|CONFIG_USE_GLIBC|CONFIG_USE_UCLIBC|CONFIG_LIBC_|CONFIG_EXTERNAL_TOOLCHAIN|CONFIG_GCC_|CONFIG_BINUTILS_)' \
             configs/jdc-ax1800pro.config \
@@ -100,11 +108,13 @@ jobs:
         )"
 
         feeds_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
-        dl_hash="$(hash_file_list configs/jdc-ax1800pro.config feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh scripts/extract-prebuilt-ipks.sh "${package_files[@]}")"
+        dl_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh "${package_files[@]}")"
         ccache_hash="$(hash_file_list configs/jdc-ax1800pro.config feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh scripts/extract-prebuilt-ipks.sh "${package_files[@]}")"
         toolchain_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
 
         {
+          echo "package_tree_hash=$package_tree_hash"
+          echo "package_selection_hash=$package_selection_hash"
           echo "toolchain_config_hash=$toolchain_config_hash"
           echo "feeds_hash=$feeds_hash"
           echo "dl_hash=$dl_hash"
@@ -279,6 +289,23 @@ jobs:
         echo "commit=$(git -C openwrt rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
+    - name: Show cache plan
+      run: |
+        echo "Cache fingerprints:"
+        echo "  package_selection_hash=${{ steps.cache_fingerprint.outputs.package_selection_hash }}"
+        echo "  package_tree_hash=${{ steps.cache_fingerprint.outputs.package_tree_hash }}"
+        echo "  toolchain_config_hash=${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}"
+        echo "  feeds_hash=${{ steps.cache_fingerprint.outputs.feeds_hash }}"
+        echo "  dl_hash=${{ steps.cache_fingerprint.outputs.dl_hash }}"
+        echo "  ccache_hash=${{ steps.cache_fingerprint.outputs.ccache_hash }}"
+        echo "  toolchain_hash=${{ steps.cache_fingerprint.outputs.toolchain_hash }}"
+        echo "OpenWrt source commit: ${{ steps.openwrt_ref.outputs.commit }}"
+        echo "Cache keys:"
+        echo "  ccache=${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.ccache_hash }}"
+        echo "  feeds=${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.feeds_hash }}"
+        echo "  dl=${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.package_selection_hash }}-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.dl_hash }}"
+        echo "  toolchain=${{ runner.os }}-openwrt-toolchain-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.toolchain_hash }}"
+
     - name: Restore feeds cache
       uses: actions/cache@v4
       with:
@@ -324,8 +351,10 @@ jobs:
       with:
         path: |
           openwrt/dl
-        key: ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.dl_hash }}
+        key: ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.package_selection_hash }}-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.dl_hash }}
         restore-keys: |
+          ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.package_selection_hash }}-${{ steps.openwrt_ref.outputs.commit }}-
+          ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-${{ steps.cache_fingerprint.outputs.package_selection_hash }}-
           ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}-
           ${{ runner.os }}-openwrt-dl-
 
