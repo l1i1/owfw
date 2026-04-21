@@ -8,6 +8,10 @@ on:
         description: "SSH connection to Actions"
         required: false
         default: "false"
+      force_base_rebuild:
+        description: "Force rebuild base firmware instead of reusing the latest matching base artifact"
+        required: false
+        default: "false"
       mgrserver_repo:
         description: "MgrServer repo (owner/repo)"
         required: false
@@ -27,17 +31,190 @@ env:
   DIY_P2_SH: scripts/diy-part2.sh
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
+  BASE_BUILD_FINGERPRINT_VERSION: 2026-04-21-v1
   TZ: Asia/Shanghai
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
+  resolve_base_build:
+    name: Resolve Base Build Reuse
+    runs-on: ubuntu-22.04
+    outputs:
+      base_build_fingerprint: ${{ steps.base_fingerprint.outputs.base_build_fingerprint }}
+      reuse_base: ${{ steps.base_reuse.outputs.reuse_base }}
+      handoff_artifact_name: ${{ steps.base_reuse.outputs.handoff_artifact_name }}
+      handoff_artifact_id: ${{ steps.base_reuse.outputs.handoff_artifact_id }}
+      openwrt_commit: ${{ steps.base_reuse.outputs.openwrt_commit }}
+      feed_revision_hash: ${{ steps.base_reuse.outputs.feed_revision_hash }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute base build fingerprint
+        id: base_fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          hash_file_list() {
+            if [ "$#" -eq 0 ]; then
+              printf 'none'
+              return 0
+            fi
+
+            local tmp
+            local path
+
+            tmp="$(mktemp)"
+            : > "$tmp"
+
+            for path in "$@"; do
+              printf '%s\0' "$path" >> "$tmp"
+              cat "$path" >> "$tmp"
+              printf '\0' >> "$tmp"
+            done
+
+            sha256sum "$tmp" | awk '{print $1}'
+            rm -f "$tmp"
+          }
+
+          mapfile -t package_files < <(git ls-files -- 'package/**')
+          mapfile -t base_overlay_files < <(
+            git ls-files -- \
+              'files/**' \
+              ':(exclude)files/root/mgrserver/**' \
+              ':(exclude)files/usr/share/mgrserver-defaults/pxe/**'
+          )
+
+          base_input_hash="$(
+            hash_file_list \
+              configs/jdc-ax1800pro.config \
+              feeds.conf.default \
+              scripts/diy-part1.sh \
+              scripts/diy-part2.sh \
+              scripts/extract-prebuilt-ipks.sh \
+              scripts/clear-mgrserver-runtime-overlay.sh \
+              "${package_files[@]}" \
+              "${base_overlay_files[@]}"
+          )"
+
+          upstream_source_hash="$(
+            printf '%s\n%s\n%s\n' "$REPO_URL" "$REPO_BRANCH" "$REPO_DISPLAY_NAME" \
+              | sha256sum \
+              | awk '{print $1}'
+          )"
+
+          base_build_fingerprint="$(
+            printf '%s\n%s\n%s\n' "$BASE_BUILD_FINGERPRINT_VERSION" "$upstream_source_hash" "$base_input_hash" \
+              | sha256sum \
+              | awk '{print $1}'
+          )"
+
+          {
+            echo "base_build_fingerprint=$base_build_fingerprint"
+            echo "base_input_hash=$base_input_hash"
+            echo "upstream_source_hash=$upstream_source_hash"
+            echo "tracked_package_file_count=${#package_files[@]}"
+            echo "tracked_base_overlay_file_count=${#base_overlay_files[@]}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve reusable base artifact
+        id: base_reuse
+        uses: actions/github-script@v7
+        env:
+          BASE_BUILD_FINGERPRINT: ${{ steps.base_fingerprint.outputs.base_build_fingerprint }}
+          FORCE_BASE_REBUILD: ${{ github.event.inputs.force_base_rebuild || github.event.client_payload.force_base_rebuild || 'false' }}
+        with:
+          script: |
+            const core = require("@actions/core");
+
+            const fingerprint = process.env.BASE_BUILD_FINGERPRINT;
+            const force = String(process.env.FORCE_BASE_REBUILD || "false").toLowerCase() === "true";
+            const prefix = `openwrt-base-build-handoff-${fingerprint}-`;
+            const currentBranch = context.ref.startsWith("refs/heads/") ? context.ref.slice("refs/heads/".length) : "";
+
+            core.setOutput("reuse_base", "false");
+            core.setOutput("handoff_artifact_name", "");
+            core.setOutput("handoff_artifact_id", "");
+            core.setOutput("openwrt_commit", "");
+            core.setOutput("feed_revision_hash", "");
+
+            if (force) {
+              core.notice(`force_base_rebuild=true, skipping base artifact reuse for fingerprint ${fingerprint}`);
+              return;
+            }
+
+            const artifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              }
+            );
+
+            const matches = artifacts
+              .filter((artifact) => {
+                if (artifact.expired || !artifact.name.startsWith(prefix)) {
+                  return false;
+                }
+
+                if (!currentBranch || !artifact.workflow_run?.head_branch) {
+                  return true;
+                }
+
+                return artifact.workflow_run.head_branch === currentBranch;
+              })
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+            const pattern = new RegExp(`^openwrt-base-build-handoff-${fingerprint}-([0-9a-f]{40})-([0-9a-f]{64})$`);
+
+            for (const artifact of matches) {
+              const parsed = artifact.name.match(pattern);
+              if (!parsed) {
+                core.warning(`Skipping malformed base handoff artifact name: ${artifact.name}`);
+                continue;
+              }
+
+              core.notice(`Reusing base artifact ${artifact.name} from workflow run ${artifact.workflow_run?.id ?? "unknown"}`);
+              core.setOutput("reuse_base", "true");
+              core.setOutput("handoff_artifact_name", artifact.name);
+              core.setOutput("handoff_artifact_id", String(artifact.id));
+              core.setOutput("openwrt_commit", parsed[1]);
+              core.setOutput("feed_revision_hash", parsed[2]);
+              return;
+            }
+
+            core.notice(`No reusable base artifact found for fingerprint ${fingerprint} on branch ${currentBranch || "unknown"}`);
+
+      - name: Show base reuse plan
+        run: |
+          echo "Base build fingerprint version: $BASE_BUILD_FINGERPRINT_VERSION"
+          echo "Base build fingerprint: ${{ steps.base_fingerprint.outputs.base_build_fingerprint }}"
+          echo "Upstream source hash: ${{ steps.base_fingerprint.outputs.upstream_source_hash }}"
+          echo "OpenWrt source selector: $REPO_URL @ $REPO_BRANCH"
+          echo "Base input hash: ${{ steps.base_fingerprint.outputs.base_input_hash }}"
+          echo "Tracked package files: ${{ steps.base_fingerprint.outputs.tracked_package_file_count }}"
+          echo "Tracked base overlay files: ${{ steps.base_fingerprint.outputs.tracked_base_overlay_file_count }}"
+          echo "Reuse base artifact: ${{ steps.base_reuse.outputs.reuse_base }}"
+          echo "Resolved handoff artifact: ${{ steps.base_reuse.outputs.handoff_artifact_name }}"
+          echo "Resolved OpenWrt commit: ${{ steps.base_reuse.outputs.openwrt_commit }}"
+          echo "Resolved feed revision hash: ${{ steps.base_reuse.outputs.feed_revision_hash }}"
+
   build_base:
     name: Build Base Firmware
     runs-on: ubuntu-22.04
     timeout-minutes: 600
+    needs:
+      - resolve_base_build
+    if: needs.resolve_base_build.outputs.reuse_base != 'true'
     outputs:
+      base_build_fingerprint: ${{ needs.resolve_base_build.outputs.base_build_fingerprint }}
+      handoff_artifact_name: ${{ steps.base_artifact_names.outputs.handoff_artifact_name }}
       openwrt_commit: ${{ steps.openwrt_ref.outputs.commit }}
       feed_revision_hash: ${{ steps.resolved_feeds.outputs.feed_revision_hash }}
 
@@ -183,6 +360,7 @@ jobs:
       - name: Show cache plan
         run: |
           echo "Build role: base"
+          echo "Base build fingerprint: ${{ needs.resolve_base_build.outputs.base_build_fingerprint }}"
           echo "Cache fingerprints:"
           echo "  package_selection_hash=${{ steps.cache_fingerprint.outputs.package_selection_hash }}"
           echo "  package_tree_hash=${{ steps.cache_fingerprint.outputs.package_tree_hash }}"
@@ -463,6 +641,17 @@ jobs:
           echo "Prepared target/package cache snapshot:"
           du -sh "$CACHE_ROOT" || true
 
+      - name: Compute base artifact names
+        id: base_artifact_names
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          handoff_artifact_name="openwrt-base-build-handoff-${{ needs.resolve_base_build.outputs.base_build_fingerprint }}-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.resolved_feeds.outputs.feed_revision_hash }}"
+          echo "handoff_artifact_name=$handoff_artifact_name" >> "$GITHUB_OUTPUT"
+          echo "Resolved base handoff artifact name: $handoff_artifact_name"
+
       - name: Prepare base build handoff artifact
         if: steps.compile.outputs.status == 'success' && !cancelled()
         shell: bash
@@ -472,6 +661,14 @@ jobs:
           HANDOFF_ROOT="$GITHUB_WORKSPACE/.artifact-handoff/base-build"
           rm -rf "$HANDOFF_ROOT"
           mkdir -p "$HANDOFF_ROOT/target-package" "$HANDOFF_ROOT/dl"
+
+          cat > "$HANDOFF_ROOT/metadata.json" <<EOF
+          {
+            "base_build_fingerprint": "${{ needs.resolve_base_build.outputs.base_build_fingerprint }}",
+            "openwrt_commit": "${{ steps.openwrt_ref.outputs.commit }}",
+            "feed_revision_hash": "${{ steps.resolved_feeds.outputs.feed_revision_hash }}"
+          }
+          EOF
 
           if [ -d "$GITHUB_WORKSPACE/.cache/openwrt-target-package" ]; then
             rsync -a "$GITHUB_WORKSPACE/.cache/openwrt-target-package/" "$HANDOFF_ROOT/target-package/"
@@ -507,15 +704,20 @@ jobs:
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success' && !cancelled()
         with:
-          name: openwrt-base-build-handoff
+          name: ${{ steps.base_artifact_names.outputs.handoff_artifact_name }}
           path: ${{ github.workspace }}/.artifact-handoff/base-build
-          retention-days: 1
+          retention-days: 7
 
   build_overlay:
     name: Build MgrServer Overlay Firmware
     runs-on: ubuntu-22.04
     timeout-minutes: 600
+    if: |
+      always() &&
+      needs.resolve_base_build.result == 'success' &&
+      (needs.build_base.result == 'success' || needs.build_base.result == 'skipped')
     needs:
+      - resolve_base_build
       - build_base
 
     steps:
@@ -681,7 +883,7 @@ jobs:
         id: openwrt_ref
         working-directory: /workdir
         env:
-          BASE_OPENWRT_COMMIT: ${{ needs.build_base.outputs.openwrt_commit }}
+          BASE_OPENWRT_COMMIT: ${{ needs.resolve_base_build.outputs.reuse_base == 'true' && needs.resolve_base_build.outputs.openwrt_commit || needs.build_base.outputs.openwrt_commit }}
         run: |
           df -hT $PWD
           git clone $REPO_URL -b $REPO_BRANCH openwrt
@@ -696,19 +898,102 @@ jobs:
           echo "commit=$actual_commit" >> "$GITHUB_OUTPUT"
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      - name: Download base build handoff artifact
+      - name: Download reusable base build handoff artifact
         id: base_handoff_artifact
+        if: needs.resolve_base_build.outputs.reuse_base == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.resolve_base_build.outputs.handoff_artifact_id }}
+          ARCHIVE_PATH: ${{ runner.temp }}/openwrt-base-build-handoff.zip
+          TARGET_DIR: ${{ github.workspace }}/.artifact-handoff/base-build
+        run: |
+          set -euo pipefail
+
+          rm -rf "$TARGET_DIR"
+          mkdir -p "$TARGET_DIR"
+
+          if ! curl -fsSL --retry 5 --retry-delay 5 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            -o "$ARCHIVE_PATH"; then
+            echo "WARNING: failed to download reusable base handoff artifact ${ARTIFACT_ID}; falling back to cache-only overlay build."
+            exit 0
+          fi
+
+          if ! python3 - <<'PY'
+          import os
+          import zipfile
+
+          archive_path = os.environ["ARCHIVE_PATH"]
+          target_dir = os.environ["TARGET_DIR"]
+
+          with zipfile.ZipFile(archive_path) as archive:
+              archive.extractall(target_dir)
+          PY
+          then
+            echo "WARNING: failed to extract reusable base handoff artifact ${ARTIFACT_ID}; falling back to cache-only overlay build."
+            rm -rf "$TARGET_DIR"
+            mkdir -p "$TARGET_DIR"
+            exit 0
+          fi
+
+      - name: Download current-run base build handoff artifact
+        if: needs.resolve_base_build.outputs.reuse_base != 'true'
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
           if-no-files-found: ignore
-          name: openwrt-base-build-handoff
+          name: ${{ needs.build_base.outputs.handoff_artifact_name }}
           path: ${{ github.workspace }}/.artifact-handoff/base-build
+
+      - name: Verify base handoff metadata
+        shell: bash
+        env:
+          EXPECTED_BASE_BUILD_FINGERPRINT: ${{ needs.resolve_base_build.outputs.base_build_fingerprint }}
+          EXPECTED_OPENWRT_COMMIT: ${{ needs.resolve_base_build.outputs.reuse_base == 'true' && needs.resolve_base_build.outputs.openwrt_commit || needs.build_base.outputs.openwrt_commit }}
+          EXPECTED_FEED_REVISION_HASH: ${{ needs.resolve_base_build.outputs.reuse_base == 'true' && needs.resolve_base_build.outputs.feed_revision_hash || needs.build_base.outputs.feed_revision_hash }}
+          METADATA_FILE: ${{ github.workspace }}/.artifact-handoff/base-build/metadata.json
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "$METADATA_FILE" ]; then
+            echo "Base handoff metadata not found at $METADATA_FILE; continuing with cache-only overlay build."
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          metadata_path = os.environ["METADATA_FILE"]
+          expected = {
+              "base_build_fingerprint": os.environ["EXPECTED_BASE_BUILD_FINGERPRINT"],
+              "openwrt_commit": os.environ["EXPECTED_OPENWRT_COMMIT"],
+              "feed_revision_hash": os.environ["EXPECTED_FEED_REVISION_HASH"],
+          }
+
+          with open(metadata_path, "r", encoding="utf-8") as fh:
+              actual = json.load(fh)
+
+          for key, expected_value in expected.items():
+              actual_value = actual.get(key)
+              if actual_value != expected_value:
+                  print(f"Metadata mismatch for {key}: expected {expected_value}, got {actual_value}", file=sys.stderr)
+                  sys.exit(1)
+
+          print("Base handoff metadata verified:")
+          print(json.dumps(actual, indent=2))
+          PY
 
       - name: Show cache plan
         run: |
           echo "Build role: mgrserver-overlay"
-          echo "Base build OpenWrt commit: ${{ needs.build_base.outputs.openwrt_commit }}"
+          echo "Base build fingerprint: ${{ needs.resolve_base_build.outputs.base_build_fingerprint }}"
+          echo "Reusing previous base artifact: ${{ needs.resolve_base_build.outputs.reuse_base }}"
+          echo "Base build OpenWrt commit: ${{ needs.resolve_base_build.outputs.reuse_base == 'true' && needs.resolve_base_build.outputs.openwrt_commit || needs.build_base.outputs.openwrt_commit }}"
           echo "Cache fingerprints:"
           echo "  package_selection_hash=${{ steps.cache_fingerprint.outputs.package_selection_hash }}"
           echo "  package_tree_hash=${{ steps.cache_fingerprint.outputs.package_tree_hash }}"
@@ -779,9 +1064,9 @@ jobs:
 
       - name: Verify overlay feed fingerprint matches base build
         run: |
-          if [ "${{ steps.resolved_feeds.outputs.feed_revision_hash }}" != "${{ needs.build_base.outputs.feed_revision_hash }}" ]; then
+          if [ "${{ steps.resolved_feeds.outputs.feed_revision_hash }}" != "${{ needs.resolve_base_build.outputs.reuse_base == 'true' && needs.resolve_base_build.outputs.feed_revision_hash || needs.build_base.outputs.feed_revision_hash }}" ]; then
             echo "ERROR: overlay build resolved different feed revisions from base build" >&2
-            echo "  base:    ${{ needs.build_base.outputs.feed_revision_hash }}" >&2
+            echo "  base:    ${{ needs.resolve_base_build.outputs.reuse_base == 'true' && needs.resolve_base_build.outputs.feed_revision_hash || needs.build_base.outputs.feed_revision_hash }}" >&2
             echo "  overlay: ${{ steps.resolved_feeds.outputs.feed_revision_hash }}" >&2
             exit 1
           fi
@@ -1068,8 +1353,8 @@ jobs:
       - name: Delete workflow runs
         uses: Mattraks/delete-workflow-runs@v2
         with:
-          retain_days: 1
-          keep_minimum_runs: 3
+          retain_days: 7
+          keep_minimum_runs: 10
 
       - name: Remove old Releases
         uses: dev-drprasad/delete-older-releases@v0.3.3
