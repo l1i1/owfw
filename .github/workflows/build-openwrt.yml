@@ -697,8 +697,11 @@ jobs:
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
       - name: Download base build handoff artifact
+        id: base_handoff_artifact
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
+          if-no-files-found: ignore
           name: openwrt-base-build-handoff
           path: ${{ github.workspace }}/.artifact-handoff/base-build
 
@@ -878,8 +881,9 @@ jobs:
             exit 0
           fi
 
+          rm -rf "$CACHE_ROOT"
           mkdir -p "$CACHE_ROOT"
-          rsync -a "$HANDOFF_TARGET/" "$CACHE_ROOT/"
+          rsync -a --delete "$HANDOFF_TARGET/" "$CACHE_ROOT/"
 
           echo "Applied base build target/package artifact:"
           du -sh "$HANDOFF_TARGET" || true
