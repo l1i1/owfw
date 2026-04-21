@@ -647,17 +647,25 @@ jobs:
           set -euo pipefail
 
           handoff_artifact_name="openwrt-base-build-handoff-${{ needs.resolve_base_build.outputs.base_build_fingerprint }}-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.resolved_feeds.outputs.feed_revision_hash }}"
+          handoff_payload_name="openwrt-base-build-handoff.tar"
           echo "handoff_artifact_name=$handoff_artifact_name" >> "$GITHUB_OUTPUT"
+          echo "handoff_payload_name=$handoff_payload_name" >> "$GITHUB_OUTPUT"
           echo "Resolved base handoff artifact name: $handoff_artifact_name"
+          echo "Resolved base handoff payload name: $handoff_payload_name"
 
       - name: Prepare base build handoff artifact
         if: steps.compile.outputs.status == 'success' && !cancelled()
         shell: bash
+        env:
+          HANDOFF_PAYLOAD_NAME: ${{ steps.base_artifact_names.outputs.handoff_payload_name }}
         run: |
           set -euo pipefail
 
           HANDOFF_ROOT="$GITHUB_WORKSPACE/.artifact-handoff/base-build"
+          HANDOFF_PAYLOAD="$GITHUB_WORKSPACE/.artifact-handoff/$HANDOFF_PAYLOAD_NAME"
+
           rm -rf "$HANDOFF_ROOT"
+          rm -f "$HANDOFF_PAYLOAD"
           mkdir -p "$HANDOFF_ROOT/target-package" "$HANDOFF_ROOT/dl"
 
           cat > "$HANDOFF_ROOT/metadata.json" <<EOF
@@ -678,6 +686,11 @@ jobs:
 
           echo "Prepared base build handoff artifact:"
           du -sh "$HANDOFF_ROOT" || true
+
+          tar -C "$GITHUB_WORKSPACE/.artifact-handoff" -cf "$HANDOFF_PAYLOAD" base-build
+
+          echo "Prepared base build handoff payload:"
+          ls -lh "$HANDOFF_PAYLOAD"
 
       - name: Organize base files
         id: organize
@@ -703,7 +716,7 @@ jobs:
         if: steps.compile.outputs.status == 'success' && !cancelled()
         with:
           name: ${{ steps.base_artifact_names.outputs.handoff_artifact_name }}
-          path: ${{ github.workspace }}/.artifact-handoff/base-build
+          path: ${{ github.workspace }}/.artifact-handoff/${{ steps.base_artifact_names.outputs.handoff_payload_name }}
           retention-days: 7
 
   build_overlay:
@@ -904,12 +917,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_ID: ${{ needs.resolve_base_build.outputs.handoff_artifact_id }}
           ARCHIVE_PATH: ${{ runner.temp }}/openwrt-base-build-handoff.zip
-          TARGET_DIR: ${{ github.workspace }}/.artifact-handoff/base-build
+          DOWNLOAD_DIR: ${{ github.workspace }}/.artifact-handoff/download/base-build
         run: |
           set -euo pipefail
 
-          rm -rf "$TARGET_DIR"
-          mkdir -p "$TARGET_DIR"
+          rm -rf "$DOWNLOAD_DIR"
+          mkdir -p "$DOWNLOAD_DIR"
 
           if ! curl -fsSL --retry 5 --retry-delay 5 \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -925,15 +938,15 @@ jobs:
           import zipfile
 
           archive_path = os.environ["ARCHIVE_PATH"]
-          target_dir = os.environ["TARGET_DIR"]
+          target_dir = os.environ["DOWNLOAD_DIR"]
 
           with zipfile.ZipFile(archive_path) as archive:
               archive.extractall(target_dir)
           PY
           then
             echo "WARNING: failed to extract reusable base handoff artifact ${ARTIFACT_ID}; falling back to cache-only overlay build."
-            rm -rf "$TARGET_DIR"
-            mkdir -p "$TARGET_DIR"
+            rm -rf "$DOWNLOAD_DIR"
+            mkdir -p "$DOWNLOAD_DIR"
             exit 0
           fi
 
@@ -944,7 +957,35 @@ jobs:
         with:
           if-no-files-found: ignore
           name: ${{ needs.build_base.outputs.handoff_artifact_name }}
-          path: ${{ github.workspace }}/.artifact-handoff/base-build
+          path: ${{ github.workspace }}/.artifact-handoff/download/base-build
+
+      - name: Unpack base build handoff payload
+        shell: bash
+        env:
+          DOWNLOAD_DIR: ${{ github.workspace }}/.artifact-handoff/download/base-build
+          HANDOFF_ROOT: ${{ github.workspace }}/.artifact-handoff/base-build
+        run: |
+          set -euo pipefail
+
+          payload_path="$DOWNLOAD_DIR/openwrt-base-build-handoff.tar"
+
+          rm -rf "$HANDOFF_ROOT"
+          mkdir -p "$HANDOFF_ROOT"
+
+          if [ ! -f "$payload_path" ]; then
+            echo "No base build handoff payload found; continuing with cache-only overlay build."
+            exit 0
+          fi
+
+          if ! tar -C "$GITHUB_WORKSPACE/.artifact-handoff" -xf "$payload_path"; then
+            echo "WARNING: failed to unpack base build handoff payload; continuing with cache-only overlay build."
+            rm -rf "$HANDOFF_ROOT"
+            mkdir -p "$HANDOFF_ROOT"
+            exit 0
+          fi
+
+          echo "Unpacked base build handoff payload:"
+          du -sh "$HANDOFF_ROOT" || true
 
       - name: Verify base handoff metadata
         shell: bash
