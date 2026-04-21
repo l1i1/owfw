@@ -177,8 +177,9 @@ jobs:
 
     # ================================================================
     # Prebuilt IPKs: extract into files/ to bake into firmware
-    # Avoids compiling Rust binaries (EasyTier), Go binaries (sing-box),
-    # and the PXE download engine (aria2) from source
+    # Avoids compiling Rust binaries (EasyTier) and Go binaries (sing-box)
+    # from source. aria2 is built from the current OpenWrt tree so it stays
+    # ABI-aligned with the snapshot rootfs.
     # IPK format: tar.gz containing data.tar.gz (which contains actual files)
     # ================================================================
     - name: Extract prebuilt IPKs into files overlay
@@ -326,6 +327,8 @@ jobs:
         require_config "CONFIG_PACKAGE_kmod-inet-diag=y"
         require_config "CONFIG_PACKAGE_kmod-nft-queue=y"
         require_config "CONFIG_PACKAGE_luci-compat=y"
+        require_config "CONFIG_PACKAGE_aria2=y"
+        require_config "CONFIG_ARIA2_OPENSSL=y"
         require_config "CONFIG_PACKAGE_parted=y"
         require_config "CONFIG_PACKAGE_hostapd-utils=y"
         require_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
@@ -399,7 +402,7 @@ jobs:
         echo "- MgrServer (路由器管理后台, 端口 80)" >> release.txt
         echo "- Node.js 22.x + npm" >> release.txt
         echo "- Python3 (25 子包)" >> release.txt
-        echo "- aria2 (预编译 IPK，用于 PXE 资源下载)" >> release.txt
+        echo "- aria2（跟随当前源码树编译，用于 PXE 资源下载）" >> release.txt
         echo "- sing-box (预编译 IPK，已校验 kmod-tun / kmod-inet-diag / kmod-nft-queue)" >> release.txt
         echo "- easytier v2.5.0 + luci-app-easytier (预编译 IPK，已校验 kmod-tun / luci-compat)" >> release.txt
         if [ "${HAS_QCA_NSS_DP:-false}" = "true" ]; then

@@ -173,26 +173,6 @@ extract_ipk /tmp/sing-box.ipk "$WORKSPACE_ROOT/files" \
   "usr/bin/sing-box"
 rm -f /tmp/sing-box.ipk
 
-# ImmortalWrt snapshots currently ship apk packages, while this overlay extractor
-# only supports tar.gz-based ipk payloads. Keep aria2 on the latest matching
-# aarch64_cortex-a53 ipk release and let firmware verification enforce ELF runtime
-# compatibility against the built rootfs.
-ARIA2_BASE_URL="https://downloads.immortalwrt.org/releases/24.10.3/packages/aarch64_cortex-a53/packages"
-ARIA2_VER="1.37.0-r3"
-ARIA2_URL="${ARIA2_BASE_URL}/aria2_${ARIA2_VER}_aarch64_cortex-a53.ipk"
-ARIA2_SHA256="c6707112f160aa79bf3d8a6dc44d35cff213eb4ec23312f2d87a31b0c16608ab"
-ARIA2_OPENSSL_URL="${ARIA2_BASE_URL}/aria2-openssl_${ARIA2_VER}_aarch64_cortex-a53.ipk"
-ARIA2_OPENSSL_SHA256="bddbbb4469bffda15e3bace80590d958cea13b3ac6c43a6f44acc16bd68ba8ef"
-
-download_with_retry "$ARIA2_URL" /tmp/aria2.ipk "$ARIA2_SHA256"
-extract_ipk /tmp/aria2.ipk "$WORKSPACE_ROOT/files" \
-  "usr/bin/aria2c etc/init.d/aria2 etc/config/aria2"
-rm -f /tmp/aria2.ipk
-
-download_with_retry "$ARIA2_OPENSSL_URL" /tmp/aria2-openssl.ipk "$ARIA2_OPENSSL_SHA256"
-extract_ipk /tmp/aria2-openssl.ipk "$WORKSPACE_ROOT/files" ""
-rm -f /tmp/aria2-openssl.ipk
-
 echo ""
 echo "============================================"
 echo "Prebuilt files summary:"
