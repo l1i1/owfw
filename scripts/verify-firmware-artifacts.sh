@@ -144,23 +144,29 @@ require_build_config "CONFIG_PACKAGE_ip-full=y"
 # config.buildinfo may omit the explicit package symbol even when iw is baked in.
 warn_build_config_if_missing "CONFIG_PACKAGE_iw=y" \
   "falling back to manifest/rootfs verification for iw"
-require_build_config "CONFIG_PACKAGE_parted=y"
-# e2fsprogs is also hard-required below via manifest + rootfs checks. On
-# OpenWrt master, config.buildinfo can omit the explicit symbol even when the
-# package and its mkfs.ext4 payload are actually baked in.
+# Storage support packages are hard-required below via manifest verification,
+# and their key binaries/payloads are also checked in the verified rootfs.
+# On OpenWrt master, config.buildinfo is not stable for this dependency chain:
+# explicit package symbols may be omitted even when the final image contains the
+# package selected via menu defaults or dependency propagation.
+warn_build_config_if_missing "CONFIG_PACKAGE_parted=y" \
+  "falling back to manifest/rootfs verification for parted"
 warn_build_config_if_missing "CONFIG_PACKAGE_e2fsprogs=y" \
   "falling back to manifest/rootfs verification for e2fsprogs"
-require_build_config "CONFIG_PACKAGE_blkid=y"
-# block-mount is also hard-required below via manifest verification. On
-# OpenWrt master, config.buildinfo can omit the explicit symbol even when the
-# package is selected and baked into the final image.
+warn_build_config_if_missing "CONFIG_PACKAGE_blkid=y" \
+  "falling back to manifest/rootfs verification for blkid"
 warn_build_config_if_missing "CONFIG_PACKAGE_block-mount=y" \
   "falling back to manifest verification for block-mount"
-require_build_config "CONFIG_PACKAGE_f2fs-tools=y"
-require_build_config "CONFIG_PACKAGE_kmod-fs-ext4=y"
-require_build_config "CONFIG_PACKAGE_kmod-fs-f2fs=y"
-require_build_config "CONFIG_PACKAGE_kmod-fs-udf=y"
-require_build_config "CONFIG_PACKAGE_kmod-cdrom=y"
+warn_build_config_if_missing "CONFIG_PACKAGE_f2fs-tools=y" \
+  "falling back to manifest/rootfs verification for f2fs-tools"
+warn_build_config_if_missing "CONFIG_PACKAGE_kmod-fs-ext4=y" \
+  "falling back to manifest verification for kmod-fs-ext4"
+warn_build_config_if_missing "CONFIG_PACKAGE_kmod-fs-f2fs=y" \
+  "falling back to manifest verification for kmod-fs-f2fs"
+warn_build_config_if_missing "CONFIG_PACKAGE_kmod-fs-udf=y" \
+  "falling back to manifest verification for kmod-fs-udf"
+warn_build_config_if_missing "CONFIG_PACKAGE_kmod-cdrom=y" \
+  "falling back to manifest verification for kmod-cdrom"
 require_build_config "CONFIG_PACKAGE_hostapd-utils=y"
 require_build_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
 require_build_config "CONFIG_PACKAGE_aria2=y"
