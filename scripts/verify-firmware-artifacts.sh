@@ -167,13 +167,23 @@ warn_build_config_if_missing "CONFIG_PACKAGE_kmod-fs-udf=y" \
   "falling back to manifest verification for kmod-fs-udf"
 warn_build_config_if_missing "CONFIG_PACKAGE_kmod-cdrom=y" \
   "falling back to manifest verification for kmod-cdrom"
-require_build_config "CONFIG_PACKAGE_hostapd-utils=y"
-require_build_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
-require_build_config "CONFIG_PACKAGE_aria2=y"
+# These userland utilities are all hard-required below via manifest checks, and
+# their shipped binaries/services are also validated in the rootfs where
+# relevant. On OpenWrt master, config.buildinfo can omit explicit symbols for
+# packages that are still present in the final image.
+warn_build_config_if_missing "CONFIG_PACKAGE_hostapd-utils=y" \
+  "falling back to manifest/rootfs verification for hostapd-utils"
+warn_build_config_if_missing "CONFIG_PACKAGE_miniupnpd-nftables=y" \
+  "falling back to manifest verification for miniupnpd-nftables"
+warn_build_config_if_missing "CONFIG_PACKAGE_aria2=y" \
+  "falling back to manifest/rootfs verification for aria2"
 require_build_config "CONFIG_ARIA2_OPENSSL=y"
-require_build_config "CONFIG_PACKAGE_curl=y"
-require_build_config "CONFIG_PACKAGE_wget=y"
-require_build_config "CONFIG_PACKAGE_openssh-sftp-server=y"
+warn_build_config_if_missing "CONFIG_PACKAGE_curl=y" \
+  "falling back to manifest/rootfs verification for curl"
+warn_build_config_if_missing "CONFIG_PACKAGE_wget=y" \
+  "falling back to manifest/rootfs verification for wget"
+warn_build_config_if_missing "CONFIG_PACKAGE_openssh-sftp-server=y" \
+  "falling back to manifest verification for openssh-sftp-server"
 
 require_manifest_pkg "node127"
 require_manifest_pkg "node-npm"
