@@ -145,7 +145,11 @@ require_build_config "CONFIG_PACKAGE_ip-full=y"
 warn_build_config_if_missing "CONFIG_PACKAGE_iw=y" \
   "falling back to manifest/rootfs verification for iw"
 require_build_config "CONFIG_PACKAGE_parted=y"
-require_build_config "CONFIG_PACKAGE_e2fsprogs=y"
+# e2fsprogs is also hard-required below via manifest + rootfs checks. On
+# OpenWrt master, config.buildinfo can omit the explicit symbol even when the
+# package and its mkfs.ext4 payload are actually baked in.
+warn_build_config_if_missing "CONFIG_PACKAGE_e2fsprogs=y" \
+  "falling back to manifest/rootfs verification for e2fsprogs"
 require_build_config "CONFIG_PACKAGE_blkid=y"
 require_build_config "CONFIG_PACKAGE_block-mount=y"
 require_build_config "CONFIG_PACKAGE_f2fs-tools=y"
