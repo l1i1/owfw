@@ -151,7 +151,11 @@ require_build_config "CONFIG_PACKAGE_parted=y"
 warn_build_config_if_missing "CONFIG_PACKAGE_e2fsprogs=y" \
   "falling back to manifest/rootfs verification for e2fsprogs"
 require_build_config "CONFIG_PACKAGE_blkid=y"
-require_build_config "CONFIG_PACKAGE_block-mount=y"
+# block-mount is also hard-required below via manifest verification. On
+# OpenWrt master, config.buildinfo can omit the explicit symbol even when the
+# package is selected and baked into the final image.
+warn_build_config_if_missing "CONFIG_PACKAGE_block-mount=y" \
+  "falling back to manifest verification for block-mount"
 require_build_config "CONFIG_PACKAGE_f2fs-tools=y"
 require_build_config "CONFIG_PACKAGE_kmod-fs-ext4=y"
 require_build_config "CONFIG_PACKAGE_kmod-fs-f2fs=y"
