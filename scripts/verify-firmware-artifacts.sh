@@ -175,6 +175,8 @@ warn_build_config_if_missing "CONFIG_PACKAGE_dnsmasq-full=y" \
   "falling back to manifest/rootfs verification for dnsmasq-full"
 require_build_config "CONFIG_PACKAGE_uhttpd=y"
 require_build_config "CONFIG_PACKAGE_ip-full=y"
+warn_build_config_if_missing "CONFIG_PACKAGE_iptables-nft=y" \
+  "falling back to manifest/rootfs verification for iptables nft backend"
 # iw is also verified below via manifest + rootfs checks. On OpenWrt master,
 # config.buildinfo may omit the explicit package symbol even when iw is baked in.
 warn_build_config_if_missing "CONFIG_PACKAGE_iw=y" \
@@ -231,6 +233,7 @@ require_manifest_pkg "luci-compat"
 require_manifest_pkg "dnsmasq-full"
 require_manifest_pkg "uhttpd"
 require_manifest_pkg "ip-full"
+require_manifest_pkg "iptables-nft"
 require_manifest_pkg "iw"
 require_manifest_pkg "parted"
 require_manifest_pkg "e2fsprogs"
