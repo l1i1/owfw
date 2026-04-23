@@ -113,6 +113,23 @@ require_manifest_pkg() {
   fi
 }
 
+require_manifest_pkg_any() {
+  local description="$1"
+  shift
+
+  local pkg
+  for pkg in "$@"; do
+    if grep -q "^${pkg} - " "$MANIFEST"; then
+      echo "✓ manifest package present for ${description}: $pkg"
+      return 0
+    fi
+  done
+
+  echo "✗ Missing manifest package for ${description}"
+  echo "  accepted packages: $*"
+  exit 1
+}
+
 compute_file_sha256() {
   python3 - "$1" <<'PY'
 import hashlib
@@ -211,7 +228,7 @@ require_manifest_pkg "miniupnpd-nftables"
 require_manifest_pkg "wimlib"
 require_manifest_pkg "aria2"
 require_manifest_pkg "curl"
-require_manifest_pkg "wget"
+require_manifest_pkg_any "wget userspace package" "wget" "wget-ssl" "wget-nossl"
 require_manifest_pkg "openssh-sftp-server"
 
 if grep -q '^kmod-qca-nss-dp - ' "$MANIFEST"; then
