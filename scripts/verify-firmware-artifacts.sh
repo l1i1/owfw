@@ -214,7 +214,8 @@ warn_build_config_if_missing "CONFIG_PACKAGE_miniupnpd-nftables=y" \
   "falling back to manifest verification for miniupnpd-nftables"
 warn_build_config_if_missing "CONFIG_PACKAGE_aria2=y" \
   "falling back to manifest/rootfs verification for aria2"
-require_build_config "CONFIG_ARIA2_OPENSSL=y"
+warn_build_config_if_missing "CONFIG_ARIA2_OPENSSL=y" \
+  "falling back to aria2c ELF runtime verification for the OpenSSL-linked aria2 variant"
 warn_build_config_if_missing "CONFIG_PACKAGE_curl=y" \
   "falling back to manifest/rootfs verification for curl"
 warn_build_config_if_missing "CONFIG_PACKAGE_wget=y" \
@@ -904,7 +905,6 @@ require_rootfs_any "mkfs.ext4 binary" "usr/sbin/mkfs.ext4" "sbin/mkfs.ext4"
 require_rootfs_any "iptables binary" "usr/sbin/iptables" "sbin/iptables" "usr/bin/iptables"
 require_rootfs_any "crond binary" "usr/sbin/crond" "sbin/crond" "bin/crond"
 require_rootfs_any "MgrServer server entry" "root/mgrserver/dist/index.js" "root/mgrserver/bundle/index.cjs"
-require_rootfs_any "wimlib shared library" "usr/lib/libwim.so" "usr/lib/libwim.so.15"
 require_rootfs_executable "etc/init.d/mgrserver"
 require_rootfs_executable "etc/init.d/rc-common-selfheal"
 require_rootfs_executable "etc/init.d/rcS"

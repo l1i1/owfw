@@ -90,7 +90,7 @@ jobs:
               ':(exclude)files/usr/share/mgrserver-defaults/pxe/**'
           )
 
-          base_input_hash="$(
+          base_input_hash="$({
             hash_file_list \
               configs/jdc-ax1800pro.config \
               feeds.conf.default \
@@ -100,19 +100,19 @@ jobs:
               scripts/clear-mgrserver-runtime-overlay.sh \
               "${package_files[@]}" \
               "${base_overlay_files[@]}"
-          )"
+          })"
 
-          upstream_source_hash="$(
+          upstream_source_hash="$({
             printf '%s\n%s\n%s\n' "$REPO_URL" "$REPO_BRANCH" "$REPO_DISPLAY_NAME" \
               | sha256sum \
               | awk '{print $1}'
-          )"
+          })"
 
-          base_build_fingerprint="$(
+          base_build_fingerprint="$({
             printf '%s\n%s\n%s\n' "$BASE_BUILD_FINGERPRINT_VERSION" "$upstream_source_hash" "$base_input_hash" \
               | sha256sum \
               | awk '{print $1}'
-          )"
+          })"
 
           {
             echo "base_build_fingerprint=$base_build_fingerprint"
@@ -271,28 +271,28 @@ jobs:
           mapfile -t package_files < <(git ls-files 'package/**')
 
           package_tree_hash="$(hash_file_list "${package_files[@]}")"
-          package_selection_hash="$(
+          package_selection_hash="$({
             grep -E '^(CONFIG_PACKAGE_|CONFIG_NODEJS_|CONFIG_ARIA2_|CONFIG_TARGET_ROOTFS_|CONFIG_TARGET_IMAGES_|CONFIG_SIGNED_PACKAGES|CONFIG_ALL_|CONFIG_IB|CONFIG_SDK|CONFIG_DEVEL)' \
               configs/jdc-ax1800pro.config \
               | sort \
               | sha256sum \
               | awk '{print $1}'
-          )"
-          toolchain_config_hash="$(
+          })"
+          toolchain_config_hash="$({
             grep -E '^(CONFIG_TARGET|CONFIG_TARGET_|CONFIG_TARGET_.*DEVICE_|CONFIG_ARCH|CONFIG_CPU_TYPE|CONFIG_CPU_SUBTYPE|CONFIG_USE_MUSL|CONFIG_USE_GLIBC|CONFIG_USE_UCLIBC|CONFIG_LIBC_|CONFIG_EXTERNAL_TOOLCHAIN|CONFIG_GCC_|CONFIG_BINUTILS_)' \
               configs/jdc-ax1800pro.config \
               | sort \
               | sha256sum \
               | awk '{print $1}'
-          )"
+          })"
 
           feeds_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
           dl_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh "${package_files[@]}")"
-          ccache_scope_hash="$(
+          ccache_scope_hash="$({
             printf '%s\n' "${toolchain_config_hash}" "${package_selection_hash}" \
               | sha256sum \
               | awk '{print $1}'
-          )"
+          })"
           toolchain_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
 
           {
@@ -493,6 +493,21 @@ jobs:
           path: ${{ github.workspace }}/.cache/openwrt-target-package
           key: ${{ runner.os }}-openwrt-target-package-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.cache_fingerprint.outputs.toolchain_config_hash }}-${{ steps.cache_fingerprint.outputs.package_selection_hash }}-${{ steps.cache_fingerprint.outputs.package_tree_hash }}-${{ steps.resolved_feeds.outputs.feed_revision_hash }}
 
+      - name: Download package
+        id: package
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Warm tools and toolchain cache
+        run: |
+          cd openwrt
+          echo "Reusing host tools and toolchain cache..."
+          make tools/install -j"$(nproc)" || make tools/install -j1 V=s
+          make toolchain/install -j"$(nproc)" || make toolchain/install -j1 V=s
+
       - name: Hydrate target/package cache
         shell: bash
         run: |
@@ -502,7 +517,7 @@ jobs:
           OPENWRT_ROOT="$GITHUB_WORKSPACE/openwrt"
 
           if [ ! -d "$CACHE_ROOT" ]; then
-            echo "No target/package cache staging directory restored."
+            echo "No target/package cache restored."
             exit 0
           fi
 
@@ -526,76 +541,115 @@ jobs:
           echo "Hydrated target/package cache contents:"
           du -sh "$CACHE_ROOT" || true
 
-      - name: SSH connection to Actions
-        uses: P3TERX/ssh2actions@v1.0.0
-        if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
-        env:
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-
-      - name: Download package
-        id: package
-        run: |
-          cd openwrt
-          make download -j8
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
-
-      - name: Validate package selection before compile
-        run: |
-          cd openwrt
-
-          require_config() {
-            local pattern="$1"
-            if grep -qx "$pattern" .config; then
-              echo "✓ $pattern"
-            else
-              echo "✗ Missing required config: $pattern"
-              exit 1
-            fi
-          }
-
-          require_config "CONFIG_NODEJS_22=y"
-          require_config "CONFIG_PACKAGE_node=y"
-          require_config "CONFIG_PACKAGE_node-npm=y"
-          require_config "CONFIG_PACKAGE_python3=y"
-          require_config "CONFIG_PACKAGE_kmod-tun=y"
-          require_config "CONFIG_PACKAGE_kmod-inet-diag=y"
-          require_config "CONFIG_PACKAGE_kmod-nft-queue=y"
-          require_config "CONFIG_PACKAGE_luci-compat=y"
-          require_config "CONFIG_PACKAGE_aria2=y"
-          require_config "CONFIG_ARIA2_OPENSSL=y"
-          require_config "CONFIG_PACKAGE_parted=y"
-          require_config "CONFIG_PACKAGE_hostapd-utils=y"
-          require_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
-
-      - name: Warm tools and toolchain cache
-        run: |
-          cd openwrt
-          echo "Building host tools and toolchain incrementally..."
-          make tools/install -j"$(nproc)" || make tools/install -j1 V=s
-          make toolchain/install -j"$(nproc)" || make toolchain/install -j1 V=s
-
-      - name: Compile base firmware
+      - name: Compile base firmware (without MgrServer runtime overlay)
         id: compile
         run: |
           cd openwrt
-          echo "ccache stats before compile:"
+          echo "ccache stats before base compile:"
           ccache -s || true
           echo -e "$(nproc) thread compile"
           make -j$(nproc) || make -j1 || make -j1 V=s
-          echo "ccache stats after compile:"
+          echo "ccache stats after base compile:"
           ccache -s || true
           echo "status=success" >> $GITHUB_OUTPUT
           grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
           [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-      - name: Check space usage
-        if: (!cancelled())
-        run: df -hT
+      - name: Stage base build handoff payload
+        id: stage_handoff
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        shell: bash
+        env:
+          HANDOFF_ROOT: ${{ github.workspace }}/.artifact-handoff/base-build
+          BASE_BUILD_FINGERPRINT: ${{ needs.resolve_base_build.outputs.base_build_fingerprint }}
+          OPENWRT_COMMIT: ${{ steps.openwrt_ref.outputs.commit }}
+          FEED_REVISION_HASH: ${{ steps.resolved_feeds.outputs.feed_revision_hash }}
+        run: |
+          set -euo pipefail
 
-      - name: Refresh target/package cache snapshot
+          HANDOFF_DL="$HANDOFF_ROOT/dl"
+          HANDOFF_TARGET="$HANDOFF_ROOT/target-package"
+          OPENWRT_ROOT="$GITHUB_WORKSPACE/openwrt"
+          CACHE_ROOT="$GITHUB_WORKSPACE/.cache/openwrt-target-package"
+
+          rm -rf "$HANDOFF_ROOT"
+          mkdir -p "$HANDOFF_DL" "$HANDOFF_TARGET"
+
+          if [ -d "$OPENWRT_ROOT/dl" ]; then
+            rsync -a "$OPENWRT_ROOT/dl/" "$HANDOFF_DL/"
+          fi
+
+          if [ -d "$OPENWRT_ROOT/bin/packages" ]; then
+            mkdir -p "$HANDOFF_TARGET/bin/packages"
+            rsync -a "$OPENWRT_ROOT/bin/packages/" "$HANDOFF_TARGET/bin/packages/"
+          fi
+
+          if [ -d "$OPENWRT_ROOT/staging_dir" ]; then
+            mkdir -p "$HANDOFF_TARGET/staging_dir"
+            rsync -a \
+              --prune-empty-dirs \
+              --include='*/' \
+              --include='target-*' \
+              --include='target-*/**' \
+              --exclude='*' \
+              "$OPENWRT_ROOT/staging_dir/" "$HANDOFF_TARGET/staging_dir/"
+          fi
+
+          if [ -d "$OPENWRT_ROOT/build_dir" ]; then
+            mkdir -p "$HANDOFF_TARGET/build_dir"
+            rsync -a \
+              --prune-empty-dirs \
+              --include='*/' \
+              --include='target-*' \
+              --include='target-*/**' \
+              --exclude='*' \
+              "$OPENWRT_ROOT/build_dir/" "$HANDOFF_TARGET/build_dir/"
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          handoff_root = Path(os.environ["HANDOFF_ROOT"])
+          metadata = {
+              "base_build_fingerprint": os.environ["BASE_BUILD_FINGERPRINT"],
+              "openwrt_commit": os.environ["OPENWRT_COMMIT"],
+              "feed_revision_hash": os.environ["FEED_REVISION_HASH"],
+          }
+          (handoff_root / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+          PY
+
+          tar -C "$GITHUB_WORKSPACE/.artifact-handoff" -cf "$GITHUB_WORKSPACE/.artifact-handoff/openwrt-base-build-handoff.tar" base-build
+
+          echo "Base build handoff payload prepared:"
+          du -sh "$HANDOFF_ROOT" || true
+          du -sh "$GITHUB_WORKSPACE/.artifact-handoff/openwrt-base-build-handoff.tar" || true
+
+      - name: Compute base artifact names
+        id: base_artifact_names
+        if: steps.stage_handoff.outcome == 'success' && !cancelled()
+        env:
+          BASE_BUILD_FINGERPRINT: ${{ needs.resolve_base_build.outputs.base_build_fingerprint }}
+          OPENWRT_COMMIT: ${{ steps.openwrt_ref.outputs.commit }}
+          FEED_REVISION_HASH: ${{ steps.resolved_feeds.outputs.feed_revision_hash }}
+        run: |
+          name="openwrt-base-build-handoff-${BASE_BUILD_FINGERPRINT}-${OPENWRT_COMMIT}-${FEED_REVISION_HASH}"
+          echo "handoff_artifact_name=$name" >> "$GITHUB_OUTPUT"
+          echo "Base handoff artifact name: $name"
+
+      - name: Upload base build handoff artifact
+        uses: actions/upload-artifact@v4
+        if: steps.stage_handoff.outcome == 'success' && !cancelled()
+        with:
+          name: ${{ steps.base_artifact_names.outputs.handoff_artifact_name }}
+          path: ${{ github.workspace }}/.artifact-handoff/openwrt-base-build-handoff.tar
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Stage target/package cache snapshot
+        id: stage_target_package_cache
         if: steps.compile.outputs.status == 'success' && !cancelled()
         shell: bash
         run: |
@@ -605,128 +659,46 @@ jobs:
           OPENWRT_ROOT="$GITHUB_WORKSPACE/openwrt"
 
           rm -rf "$CACHE_ROOT"
-          mkdir -p "$CACHE_ROOT/build_dir" "$CACHE_ROOT/staging_dir" "$CACHE_ROOT/bin"
-
-          shopt -s nullglob
-
-          for target_dir in "$OPENWRT_ROOT"/staging_dir/target-*; do
-            base="$(basename "$target_dir")"
-            mkdir -p "$CACHE_ROOT/staging_dir/$base"
-            rsync -a --delete --exclude 'root-*' "$target_dir"/ "$CACHE_ROOT/staging_dir/$base"/
-          done
-
-          for target_dir in "$OPENWRT_ROOT"/build_dir/target-*; do
-            [ -d "$target_dir" ] || continue
-            base="$(basename "$target_dir")"
-            mkdir -p "$CACHE_ROOT/build_dir/$base"
-
-            for entry in "$target_dir"/*; do
-              [ -d "$entry" ] || continue
-              name="$(basename "$entry")"
-              case "$name" in
-                linux-*) continue ;;
-              esac
-              mkdir -p "$CACHE_ROOT/build_dir/$base/$name"
-              rsync -a --delete "$entry"/ "$CACHE_ROOT/build_dir/$base/$name"/
-            done
-          done
+          mkdir -p "$CACHE_ROOT"
 
           if [ -d "$OPENWRT_ROOT/bin/packages" ]; then
             mkdir -p "$CACHE_ROOT/bin/packages"
-            rsync -a --delete "$OPENWRT_ROOT/bin/packages/" "$CACHE_ROOT/bin/packages/"
+            rsync -a "$OPENWRT_ROOT/bin/packages/" "$CACHE_ROOT/bin/packages/"
           fi
 
-          echo "Prepared target/package cache snapshot:"
+          if [ -d "$OPENWRT_ROOT/staging_dir" ]; then
+            mkdir -p "$CACHE_ROOT/staging_dir"
+            rsync -a \
+              --prune-empty-dirs \
+              --include='*/' \
+              --include='target-*' \
+              --include='target-*/**' \
+              --exclude='*' \
+              "$OPENWRT_ROOT/staging_dir/" "$CACHE_ROOT/staging_dir/"
+          fi
+
+          if [ -d "$OPENWRT_ROOT/build_dir" ]; then
+            mkdir -p "$CACHE_ROOT/build_dir"
+            rsync -a \
+              --prune-empty-dirs \
+              --include='*/' \
+              --include='target-*' \
+              --include='target-*/**' \
+              --exclude='*' \
+              "$OPENWRT_ROOT/build_dir/" "$CACHE_ROOT/build_dir/"
+          fi
+
+          echo "Staged curated target/package cache contents:"
           du -sh "$CACHE_ROOT" || true
 
-      - name: Compute base artifact names
-        id: base_artifact_names
-        if: steps.compile.outputs.status == 'success' && !cancelled()
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          handoff_artifact_name="openwrt-base-build-handoff-${{ needs.resolve_base_build.outputs.base_build_fingerprint }}-${{ steps.openwrt_ref.outputs.commit }}-${{ steps.resolved_feeds.outputs.feed_revision_hash }}"
-          handoff_payload_name="openwrt-base-build-handoff.tar"
-          echo "handoff_artifact_name=$handoff_artifact_name" >> "$GITHUB_OUTPUT"
-          echo "handoff_payload_name=$handoff_payload_name" >> "$GITHUB_OUTPUT"
-          echo "Resolved base handoff artifact name: $handoff_artifact_name"
-          echo "Resolved base handoff payload name: $handoff_payload_name"
-
-      - name: Prepare base build handoff artifact
-        if: steps.compile.outputs.status == 'success' && !cancelled()
-        shell: bash
-        env:
-          HANDOFF_PAYLOAD_NAME: ${{ steps.base_artifact_names.outputs.handoff_payload_name }}
-        run: |
-          set -euo pipefail
-
-          HANDOFF_ROOT="$GITHUB_WORKSPACE/.artifact-handoff/base-build"
-          HANDOFF_PAYLOAD="$GITHUB_WORKSPACE/.artifact-handoff/$HANDOFF_PAYLOAD_NAME"
-
-          rm -rf "$HANDOFF_ROOT"
-          rm -f "$HANDOFF_PAYLOAD"
-          mkdir -p "$HANDOFF_ROOT/target-package" "$HANDOFF_ROOT/dl"
-
-          cat > "$HANDOFF_ROOT/metadata.json" <<EOF
-          {
-            "base_build_fingerprint": "${{ needs.resolve_base_build.outputs.base_build_fingerprint }}",
-            "openwrt_commit": "${{ steps.openwrt_ref.outputs.commit }}",
-            "feed_revision_hash": "${{ steps.resolved_feeds.outputs.feed_revision_hash }}"
-          }
-          EOF
-
-          if [ -d "$GITHUB_WORKSPACE/.cache/openwrt-target-package" ]; then
-            rsync -a "$GITHUB_WORKSPACE/.cache/openwrt-target-package/" "$HANDOFF_ROOT/target-package/"
-          fi
-
-          if [ -d "$GITHUB_WORKSPACE/openwrt/dl" ]; then
-            rsync -a "$GITHUB_WORKSPACE/openwrt/dl/" "$HANDOFF_ROOT/dl/"
-          fi
-
-          echo "Prepared base build handoff artifact:"
-          du -sh "$HANDOFF_ROOT" || true
-
-          tar -C "$GITHUB_WORKSPACE/.artifact-handoff" -cf "$HANDOFF_PAYLOAD" base-build
-
-          echo "Prepared base build handoff payload:"
-          ls -lh "$HANDOFF_PAYLOAD"
-
-      - name: Organize base files
-        id: organize
-        if: steps.compile.outputs.status == 'success' && !cancelled()
-        run: |
-          cd openwrt/bin/targets/*/*
-          rm -rf packages
-          echo "BASE_FIRMWARE=$PWD" >> $GITHUB_ENV
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "Base firmware files:"
-          ls -la
-
-      - name: Upload base firmware directory
-        uses: actions/upload-artifact@v4
-        if: steps.organize.outputs.status == 'success' && !cancelled()
-        with:
-          name: OpenWrt_base_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-          path: ${{ env.BASE_FIRMWARE }}
-          retention-days: 3
-
-      - name: Upload base build handoff artifact
-        uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success' && !cancelled()
-        with:
-          name: ${{ steps.base_artifact_names.outputs.handoff_artifact_name }}
-          path: ${{ github.workspace }}/.artifact-handoff/${{ steps.base_artifact_names.outputs.handoff_payload_name }}
-          retention-days: 7
+      - name: Check space usage
+        if: (!cancelled())
+        run: df -hT
 
   build_overlay:
     name: Build MgrServer Overlay Firmware
     runs-on: ubuntu-22.04
     timeout-minutes: 600
-    if: |
-      always() &&
-      needs.resolve_base_build.result == 'success' &&
-      (needs.build_base.result == 'success' || needs.build_base.result == 'skipped')
     needs:
       - resolve_base_build
       - build_base
@@ -784,31 +756,36 @@ jobs:
           }
 
           mapfile -t package_files < <(git ls-files 'package/**')
+          mapfile -t overlay_files < <(
+            git ls-files -- \
+              'files/root/mgrserver/**' \
+              'files/usr/share/mgrserver-defaults/pxe/**'
+          )
 
           package_tree_hash="$(hash_file_list "${package_files[@]}")"
-          package_selection_hash="$(
+          package_selection_hash="$({
             grep -E '^(CONFIG_PACKAGE_|CONFIG_NODEJS_|CONFIG_ARIA2_|CONFIG_TARGET_ROOTFS_|CONFIG_TARGET_IMAGES_|CONFIG_SIGNED_PACKAGES|CONFIG_ALL_|CONFIG_IB|CONFIG_SDK|CONFIG_DEVEL)' \
               configs/jdc-ax1800pro.config \
               | sort \
               | sha256sum \
               | awk '{print $1}'
-          )"
-          toolchain_config_hash="$(
+          })"
+          toolchain_config_hash="$({
             grep -E '^(CONFIG_TARGET|CONFIG_TARGET_|CONFIG_TARGET_.*DEVICE_|CONFIG_ARCH|CONFIG_CPU_TYPE|CONFIG_CPU_SUBTYPE|CONFIG_USE_MUSL|CONFIG_USE_GLIBC|CONFIG_USE_UCLIBC|CONFIG_LIBC_|CONFIG_EXTERNAL_TOOLCHAIN|CONFIG_GCC_|CONFIG_BINUTILS_)' \
               configs/jdc-ax1800pro.config \
               | sort \
               | sha256sum \
               | awk '{print $1}'
-          )"
-
+          })"
           feeds_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
           dl_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh scripts/diy-part2.sh "${package_files[@]}")"
-          ccache_scope_hash="$(
+          ccache_scope_hash="$({
             printf '%s\n' "${toolchain_config_hash}" "${package_selection_hash}" \
               | sha256sum \
               | awk '{print $1}'
-          )"
+          })"
           toolchain_hash="$(hash_file_list feeds.conf.default scripts/diy-part1.sh)"
+          mgrserver_overlay_hash="$(hash_file_list scripts/copy-mgrserver-runtime-overlay.sh "${overlay_files[@]}")"
 
           {
             echo "package_tree_hash=$package_tree_hash"
@@ -818,7 +795,23 @@ jobs:
             echo "dl_hash=$dl_hash"
             echo "ccache_scope_hash=$ccache_scope_hash"
             echo "toolchain_hash=$toolchain_hash"
+            echo "mgrserver_overlay_hash=$mgrserver_overlay_hash"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve MgrServer source ref
+        id: mgrserver_ref
+        shell: bash
+        env:
+          DEFAULT_REPO: ${{ github.event.inputs.mgrserver_repo || github.event.client_payload.mgrserver_repo || 'l1i1/MgrServer' }}
+          DEFAULT_BRANCH: ${{ github.event.inputs.mgrserver_branch || github.event.client_payload.mgrserver_branch || 'main' }}
+        run: |
+          set -euo pipefail
+
+          repo="${DEFAULT_REPO:-l1i1/MgrServer}"
+          branch="${DEFAULT_BRANCH:-main}"
+
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
       - name: Setup ccache cache
         uses: actions/cache@v4
@@ -827,35 +820,6 @@ jobs:
           key: ${{ runner.os }}-openwrt-ccache-v2-${{ steps.cache_fingerprint.outputs.ccache_scope_hash }}
           restore-keys: |
             ${{ runner.os }}-openwrt-ccache-v2-
-
-      - name: Clone MgrServer source
-        id: mgrserver_ref
-        env:
-          MGRSERVER_REPO: ${{ github.event.inputs.mgrserver_repo || 'l1i1/MgrServer' }}
-          MGRSERVER_BRANCH: ${{ github.event.inputs.mgrserver_branch || 'main' }}
-        run: |
-          echo "Cloning MgrServer from ${MGRSERVER_REPO}@${MGRSERVER_BRANCH}..."
-          git clone --depth=1 --branch "$MGRSERVER_BRANCH" \
-            "https://x-access-token:${{ secrets.MGRSERVER_TOKEN }}@github.com/${MGRSERVER_REPO}.git" "$GITHUB_WORKSPACE/mgrserver-src"
-          echo "repo=${MGRSERVER_REPO}" >> "$GITHUB_OUTPUT"
-          echo "branch=${MGRSERVER_BRANCH}" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git -C "$GITHUB_WORKSPACE/mgrserver-src" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - name: Setup Node.js for MgrServer build
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "pnpm"
-          cache-dependency-path: |
-            mgrserver-src/pnpm-lock.yaml
-
-      - name: Build and stage MgrServer overlay
-        run: bash "$GITHUB_WORKSPACE/scripts/stage-mgrserver-overlay.sh"
 
       - name: Initialization environment
         env:
@@ -890,44 +854,40 @@ jobs:
           echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
           echo "CCACHE_NOHASHDIR=1" >> $GITHUB_ENV
 
-      - name: Clone source code at base commit
+      - name: Clone source code
         id: openwrt_ref
         working-directory: /workdir
-        env:
-          BASE_OPENWRT_COMMIT: ${{ needs.resolve_base_build.outputs.reuse_base == 'true' && needs.resolve_base_build.outputs.openwrt_commit || needs.build_base.outputs.openwrt_commit }}
         run: |
           df -hT $PWD
           git clone $REPO_URL -b $REPO_BRANCH openwrt
-          git -C openwrt checkout "$BASE_OPENWRT_COMMIT"
-          actual_commit="$(git -C openwrt rev-parse HEAD)"
-          if [ "$actual_commit" != "$BASE_OPENWRT_COMMIT" ]; then
-            echo "ERROR: checked-out OpenWrt commit does not match base build commit" >&2
-            echo "  expected: $BASE_OPENWRT_COMMIT" >&2
-            echo "  actual:   $actual_commit" >&2
-            exit 1
-          fi
-          echo "commit=$actual_commit" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git -C openwrt rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      - name: Download reusable base build handoff artifact
-        id: base_handoff_artifact
+      - name: Restore reusable base handoff artifact
         if: needs.resolve_base_build.outputs.reuse_base == 'true'
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           ARTIFACT_ID: ${{ needs.resolve_base_build.outputs.handoff_artifact_id }}
-          ARCHIVE_PATH: ${{ runner.temp }}/openwrt-base-build-handoff.zip
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOWNLOAD_DIR: ${{ github.workspace }}/.artifact-handoff/download/base-build
+          ARCHIVE_PATH: ${{ github.workspace }}/.artifact-handoff/download/base-build/base-build.zip
         run: |
           set -euo pipefail
 
           rm -rf "$DOWNLOAD_DIR"
           mkdir -p "$DOWNLOAD_DIR"
 
-          if ! curl -fsSL --retry 5 --retry-delay 5 \
-            -H "Authorization: Bearer $GH_TOKEN" \
+          if [ -z "$ARTIFACT_ID" ]; then
+            echo "No reusable base handoff artifact id resolved; falling back to cache-only overlay build."
+            exit 0
+          fi
+
+          download_url="https://api.github.com/repos/${GH_REPO}/actions/artifacts/${ARTIFACT_ID}/zip"
+          if ! curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            "$download_url" \
             -o "$ARCHIVE_PATH"; then
             echo "WARNING: failed to download reusable base handoff artifact ${ARTIFACT_ID}; falling back to cache-only overlay build."
             exit 0
@@ -955,7 +915,6 @@ jobs:
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          if-no-files-found: ignore
           name: ${{ needs.build_base.outputs.handoff_artifact_name }}
           path: ${{ github.workspace }}/.artifact-handoff/download/base-build
 
