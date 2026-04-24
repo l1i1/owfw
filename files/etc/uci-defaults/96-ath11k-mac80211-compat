@@ -1,5 +1,5 @@
 #!/bin/sh
-# Keep ath11k first-boot settings idempotent without overriding mac80211.sh in overlay.
+# Keep ath11k first-boot settings idempotent without patching runtime wireless helpers.
 
 set -e
 

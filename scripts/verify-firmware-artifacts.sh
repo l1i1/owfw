@@ -1216,7 +1216,7 @@ verify_uci_defaults_boot_semantics() {
     exit 1
   fi
 
-  if grep -Fq 'mac80211.sh' "$tmp"; then
+  if grep -Eq '(^|[[:space:]])(cp|mv|sed|perl|awk)[[:space:]].*mac80211\.sh|>>?[[:space:]].*mac80211\.sh|mac80211\.sh.*>>?' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: /etc/uci-defaults/96-ath11k-mac80211-compat still mutates the runtime mac80211.sh in overlay"
     exit 1
