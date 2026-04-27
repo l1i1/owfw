@@ -29,6 +29,9 @@ echo "Staging MgrServer runtime..."
 mkdir -p "$MGR_DEST"
 pnpm --filter @mgr/server deploy --legacy --prod "$MGR_DEST"
 
+# Remove CLI tools not needed in firmware
+rm -f "$MGR_DEST/dist/cli/superadmin_password.js" 2>/dev/null || true
+
 if [ -f packages/server/commands.json ]; then
   cp packages/server/commands.json "$MGR_DEST/"
 fi
