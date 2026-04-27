@@ -19,10 +19,10 @@ bash "$CLEAR_SCRIPT" "$FILES_ROOT"
 
 cd "$MGRSERVER_SRC"
 
-echo "Installing MgrServer dependencies..."
+echo "Installing MgrServer dependencies (for build only)..."
 pnpm install --frozen-lockfile
 
-echo "Building MgrServer bundle..."
+echo "Building standalone bundle..."
 pnpm --filter @mgr/server bundle:obf
 
 echo "Staging MgrServer runtime..."
