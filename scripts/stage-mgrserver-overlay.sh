@@ -25,17 +25,21 @@ pnpm install --frozen-lockfile
 echo "Building MgrServer..."
 pnpm build
 
+echo "Bundling MgrServer into single JS..."
+pnpm --filter @mgr/server bundle:obf
+
 echo "Staging MgrServer runtime..."
 mkdir -p "$MGR_DEST"
-pnpm --filter @mgr/server deploy --legacy --prod "$MGR_DEST"
 
-# Remove CLI tools not needed in firmware
-rm -f "$MGR_DEST/dist/cli/superadmin_password.js" 2>/dev/null || true
+# Copy bundled single JS
+mkdir -p "$MGR_DEST/bundle"
+cp packages/server/dist-bundle/index.cjs "$MGR_DEST/bundle/"
 
-if [ -f packages/server/commands.json ]; then
-  cp packages/server/commands.json "$MGR_DEST/"
-fi
+# Copy required non-bundled files
+cp packages/server/commands.json "$MGR_DEST/"
+[ -f packages/server/.mgrserver-first-start ] && cp packages/server/.mgrserver-first-start "$MGR_DEST/"
 
+# Copy web dist
 if [ -d packages/web/dist ]; then
   cp -r packages/web/dist "$MGR_DEST/web-dist"
 else
@@ -43,14 +47,6 @@ else
 fi
 
 cd "$MGR_DEST"
-find node_modules -type d \( -name ".bin" -o -name ".cache" -o -name "@types" \
-  -o -name "test" -o -name "tests" -o -name "__tests__" -o -name "coverage" \
-  -o -name "docs" -o -name "doc" -o -name "website" -o -name "example" \
-  -o -name "examples" \) -exec rm -rf {} + 2>/dev/null || true
-find node_modules -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.d.ts" \
-  -o -name "*.map" -o -name "*.md" -o -name "*.markdown" -o -name "CHANGELOG*" \
-  -o -name "README*" -o -name "LICENSE*" -o -name "*.tgz" \
-  -o -name "tsconfig*.json" \) -delete 2>/dev/null || true
 
 echo "MgrServer staged at: $MGR_DEST"
 du -sh "$MGR_DEST"

@@ -147,11 +147,7 @@ validate_config() {
   # Check server entry
   local server_entry="${app_dir}/bundle/index.cjs"
   if [ ! -f "$server_entry" ]; then
-    server_entry="${app_dir}/dist/index.js"
-  fi
-  
-  if [ ! -f "$server_entry" ]; then
-    log_msg "err" "Server entry not found: ${app_dir}/bundle/index.cjs or ${app_dir}/dist/index.js"
+    log_msg "err" "Server entry not found: ${app_dir}/bundle/index.cjs"
     return 1
   fi
   
@@ -193,7 +189,6 @@ start_service() {
   fi
 
   local server_entry="${app_dir}/bundle/index.cjs"
-  [ ! -f "$server_entry" ] && server_entry="${app_dir}/dist/index.js"
 
   local serve_static_bool="false"
   [ "$serve_static" = "1" ] && serve_static_bool="true"
