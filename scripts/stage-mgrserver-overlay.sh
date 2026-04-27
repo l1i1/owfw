@@ -22,6 +22,9 @@ cd "$MGRSERVER_SRC"
 echo "Installing MgrServer dependencies (for build only)..."
 pnpm install --frozen-lockfile
 
+echo "Building contracts..."
+pnpm --filter @mgr/contracts build
+
 echo "Building standalone bundle..."
 pnpm --filter @mgr/server bundle:obf
 
