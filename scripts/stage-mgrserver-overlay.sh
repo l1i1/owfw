@@ -22,24 +22,15 @@ cd "$MGRSERVER_SRC"
 echo "Installing MgrServer dependencies..."
 pnpm install --frozen-lockfile
 
-echo "Building MgrServer..."
-pnpm build
-
-echo "Bundling MgrServer into single JS..."
+echo "Building MgrServer bundle..."
 pnpm --filter @mgr/server bundle:obf
 
 echo "Staging MgrServer runtime..."
-mkdir -p "$MGR_DEST"
-
-# Copy bundled single JS
 mkdir -p "$MGR_DEST/bundle"
 cp packages/server/dist-bundle/index.cjs "$MGR_DEST/bundle/"
-
-# Copy required non-bundled files
 cp packages/server/commands.json "$MGR_DEST/"
 [ -f packages/server/.mgrserver-first-start ] && cp packages/server/.mgrserver-first-start "$MGR_DEST/"
 
-# Copy web dist
 if [ -d packages/web/dist ]; then
   cp -r packages/web/dist "$MGR_DEST/web-dist"
 else
