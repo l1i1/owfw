@@ -874,6 +874,7 @@ require_rootfs_entry "usr/bin/service-watchdog"
 require_rootfs_entry "etc/uci-defaults/96-ath11k-mac80211-compat"
 require_rootfs_entry "etc/uci-defaults/98-home-partition"
 require_rootfs_entry "etc/uci-defaults/99-mgrserver-ports"
+require_rootfs_entry "etc/uci-defaults/99-restrict-admin-vpn"
 require_rootfs_entry "etc/uci-defaults/99-service-watchdog-cron"
 require_rootfs_entry "lib/preinit/81_rc_common_selfheal"
 require_rootfs_entry "usr/bin/sing-box"
@@ -916,6 +917,7 @@ require_rootfs_executable "etc/init.d/cron"
 require_rootfs_executable "etc/uci-defaults/96-ath11k-mac80211-compat"
 require_rootfs_executable "etc/uci-defaults/98-home-partition"
 require_rootfs_executable "etc/uci-defaults/99-mgrserver-ports"
+require_rootfs_executable "etc/uci-defaults/99-restrict-admin-vpn"
 require_rootfs_executable "etc/uci-defaults/99-service-watchdog-cron"
 require_rootfs_executable "usr/share/mgrserver-defaults/pxe/up_pxe_res.sh"
 
@@ -1076,6 +1078,12 @@ verify_preinit_overlay_boot_repair() {
   if ! grep -Fq 'etc/uci-defaults/99-mgrserver-ports:0755' "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/99-mgrserver-ports"
+    exit 1
+  fi
+
+  if ! grep -Fq 'etc/uci-defaults/99-restrict-admin-vpn:0755' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: preinit self-heal does not reset stale overlay /etc/uci-defaults/99-restrict-admin-vpn"
     exit 1
   fi
 
