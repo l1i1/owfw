@@ -1,0 +1,142 @@
+#!/bin/sh
+# Restrict LuCI (3500) and SSH (22) to VPN (easytier) only.
+#
+# Two-layer enforcement:
+#   Layer 1 — UCI DROP rules on LAN zone (always works)
+#   Layer 2 — nftables insert at position 0 of inet fw4 input (accepts
+#             VPN iface traffic before zone jumps so the DROP rules in
+#             input_lan are skipped for VPN-originated packets).
+#
+# A fw4 script-type include handles firewall reloads; an init script
+# (START=99) acts as a fallback on boot if the fw4 include doesn't run.
+
+set -e
+
+. /lib/functions.sh
+
+LOCK="/tmp/.restrict-admin-firewall-done"
+[ -f "$LOCK" ] && exit 0
+
+ADMIN_PORTS="22 3500"
+FIX_SCRIPT="/etc/firewall.vpn-admin-fix"
+INIT_SCRIPT="/etc/init.d/vpn-admin-firewall"
+
+log_msg() {
+  logger -t "restrict-admin" "$1" 2>/dev/null || true
+}
+
+# --------------------------------------------------------------
+# 1. Dropbear hardening
+# --------------------------------------------------------------
+if uci -q get dropbear.@dropbear[0] >/dev/null 2>&1; then
+  uci set dropbear.@dropbear[0].GatewayPorts="0"
+  uci set dropbear.@dropbear[0].PasswordAuth="on"
+  uci set dropbear.@dropbear[0].RootPasswordAuth="on"
+  uci commit dropbear
+fi
+
+# --------------------------------------------------------------
+# 2. Shared nftables insert script — called by both the fw4
+#    script include and the fallback init script.
+# --------------------------------------------------------------
+cat > "$FIX_SCRIPT" <<'FIXSCRIPT'
+#!/bin/sh
+# Insert ACCEPT rules at position 0 of inet fw4 input so VPN
+# traffic is accepted before zone jumps dispatch it to input_lan
+# (where the DROP rules live).
+
+CHAIN="inet fw4 input"
+IFACE_GLOBS="easytier* tunl*"
+
+# Verify the target chain exists (fw4 is loaded)
+nft list chain $CHAIN >/dev/null 2>&1 || exit 0
+
+# Check if rules are already present (idempotency)
+if nft list chain $CHAIN 2>/dev/null | grep -qF 'iifname "easytier'; then
+  exit 0
+fi
+
+for glob in $IFACE_GLOBS; do
+  nft insert rule $CHAIN iifname "$glob" tcp dport { 22, 3500 } accept 2>/dev/null || true
+done
+FIXSCRIPT
+chmod +x "$FIX_SCRIPT"
+
+# --------------------------------------------------------------
+# 3. fw4 script-type include — runs $FIX_SCRIPT after every
+#    firewall reload (primary mechanism, handles zone changes).
+# --------------------------------------------------------------
+config_load firewall
+uci -q delete firewall.vpn_admin_fix 2>/dev/null || true
+uci set firewall.vpn_admin_fix=include
+uci set firewall.vpn_admin_fix.path="$FIX_SCRIPT"
+uci set firewall.vpn_admin_fix.type="script"
+uci commit firewall
+log_msg "fw4 script include registered"
+
+# --------------------------------------------------------------
+# 4. Fallback init script — runs once at boot (START=99) after
+#    firewall is up. No-op if the fw4 include already did the job.
+# --------------------------------------------------------------
+cat > "$INIT_SCRIPT" <<'INITSCRIPT'
+#!/bin/sh /rom/etc/rc.common
+# Fallback: insert VPN admin ACCEPT rules on boot if the fw4
+# script include didn't fire.  START=99 runs after firewall (45).
+
+START=99
+STOP=01
+
+boot() {
+  /etc/firewall.vpn-admin-fix
+}
+INITSCRIPT
+chmod +x "$INIT_SCRIPT"
+
+if [ -x /etc/rc.common ] || [ -f /rom/etc/rc.common ]; then
+  "$INIT_SCRIPT" enable 2>/dev/null || true
+  log_msg "init script enabled as fallback"
+fi
+
+# --------------------------------------------------------------
+# 5. UCI DROP rules — LAN input → ports 22, 3500
+# --------------------------------------------------------------
+for port in $ADMIN_PORTS; do
+  uci -q delete firewall."block_lan_admin_${port}" 2>/dev/null || true
+  uci set firewall."block_lan_admin_${port}"=rule
+  uci set firewall."block_lan_admin_${port}".name="Block-LAN-admin-${port}"
+  uci set firewall."block_lan_admin_${port}".src="lan"
+  uci set firewall."block_lan_admin_${port}".proto="tcp"
+  uci set firewall."block_lan_admin_${port}".dest_port="$port"
+  uci set firewall."block_lan_admin_${port}".target="DROP"
+  uci set firewall."block_lan_admin_${port}".family="any"
+done
+
+uci commit firewall
+
+# --------------------------------------------------------------
+# 6. Apply and verify
+# --------------------------------------------------------------
+if /etc/init.d/firewall enabled 2>/dev/null; then
+  /etc/init.d/firewall reload >/dev/null 2>&1 || true
+  log_msg "firewall reloaded"
+
+  # Run the fix script now so rules are in place immediately
+  sleep 1
+  "$FIX_SCRIPT" 2>/dev/null || true
+
+  # Verify DROP rules made it into the live ruleset
+  for port in $ADMIN_PORTS; do
+    if nft list chain inet fw4 input_lan 2>/dev/null | grep -q "dport $port.*drop"; then
+      log_msg "verified: port $port DROP rule active"
+    else
+      log_msg "WARNING: port $port DROP rule not found in nftables"
+    fi
+  done
+else
+  log_msg "firewall not enabled, rules will apply on first start"
+fi
+
+touch "$LOCK"
+log_msg "restrict-admin complete"
+
+exit 0
