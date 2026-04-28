@@ -25,6 +25,9 @@ pnpm install --frozen-lockfile
 echo "Building contracts..."
 pnpm --filter @mgr/contracts build
 
+echo "Building web frontend..."
+pnpm --filter @mgr/web build
+
 echo "Building standalone bundle..."
 pnpm --filter @mgr/server bundle:obf
 
@@ -37,7 +40,8 @@ cp packages/server/commands.json "$MGR_DEST/"
 if [ -d packages/web/dist ]; then
   cp -r packages/web/dist "$MGR_DEST/web-dist"
 else
-  echo "WARNING: packages/web/dist not found" >&2
+  echo "ERROR: packages/web/dist not found after build" >&2
+  exit 1
 fi
 
 cd "$MGR_DEST"
