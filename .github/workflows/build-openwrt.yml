@@ -87,7 +87,7 @@ jobs:
             git ls-files -- \
               'files/**' \
               ':(exclude)files/root/mgrserver/**' \
-              ':(exclude)files/usr/share/mgrserver-defaults/pxe/**'
+              ':(exclude)files/usr/share/mgrserver-defaults/res/pxe/**'
           )
 
           base_input_hash="$(

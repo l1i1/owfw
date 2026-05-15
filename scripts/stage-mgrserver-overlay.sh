@@ -6,7 +6,7 @@ MGRSERVER_SRC="${1:-$WORKSPACE_ROOT/mgrserver-src}"
 FILES_ROOT="${2:-$WORKSPACE_ROOT/files}"
 CLEAR_SCRIPT="$WORKSPACE_ROOT/scripts/clear-mgrserver-runtime-overlay.sh"
 MGR_DEST="$FILES_ROOT/root/mgrserver"
-PXE_DEST="$FILES_ROOT/usr/share/mgrserver-defaults/pxe"
+PXE_DEST="$FILES_ROOT/usr/share/mgrserver-defaults/res/pxe"
 PXE_SRC="$MGRSERVER_SRC/pxe-server"
 
 if [ ! -d "$MGRSERVER_SRC" ]; then

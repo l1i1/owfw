@@ -76,8 +76,8 @@ if [ -d "$OVERLAY_DIR" ]; then
     fi
 
     # Report PXE resources size if present
-    if [ -d "$OVERLAY_DIR/usr/share/mgrserver-defaults/pxe" ]; then
-        PXE_SIZE=$(du -sh "$OVERLAY_DIR/usr/share/mgrserver-defaults/pxe" | awk '{print $1}')
+    if [ -d "$OVERLAY_DIR/usr/share/mgrserver-defaults/res/pxe" ]; then
+        PXE_SIZE=$(du -sh "$OVERLAY_DIR/usr/share/mgrserver-defaults/res/pxe" | awk '{print $1}')
         echo "  PXE resources size: $PXE_SIZE"
     fi
 fi

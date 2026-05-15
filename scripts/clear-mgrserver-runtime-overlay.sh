@@ -4,7 +4,7 @@ set -euo pipefail
 WORKSPACE_ROOT="${GITHUB_WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 FILES_ROOT="${1:-$WORKSPACE_ROOT/files}"
 MGR_DEST="$FILES_ROOT/root/mgrserver"
-PXE_DEST="$FILES_ROOT/usr/share/mgrserver-defaults/pxe"
+PXE_DEST="$FILES_ROOT/usr/share/mgrserver-defaults/res/pxe"
 
 rm -rf "$MGR_DEST" "$PXE_DEST"
 

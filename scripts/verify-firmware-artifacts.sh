@@ -890,9 +890,9 @@ require_rootfs_entry "etc/init.d/easytier"
 require_rootfs_entry "etc/config/easytier"
 require_rootfs_entry "usr/lib/lua/luci/controller/easytier.lua"
 require_rootfs_entry "usr/share/rpcd/acl.d/luci-app-easytier.json"
-require_rootfs_entry "usr/share/mgrserver-defaults/pxe/config.ini"
-require_rootfs_entry "usr/share/mgrserver-defaults/pxe/up_pxe_res.sh"
-require_rootfs_entry "usr/share/mgrserver-defaults/pxe/tftpboot"
+require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/config.ini"
+require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/up_pxe_res.sh"
+require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/tftpboot"
 require_rootfs_entry "root/mgrserver/commands.json"
 require_rootfs_entry "root/mgrserver/web-dist/index.html"
 require_rootfs_entry "usr/bin/node"
@@ -919,7 +919,7 @@ require_rootfs_executable "etc/uci-defaults/98-home-partition"
 require_rootfs_executable "etc/uci-defaults/99-mgrserver-ports"
 require_rootfs_executable "etc/uci-defaults/99-restrict-admin-vpn"
 require_rootfs_executable "etc/uci-defaults/99-service-watchdog-cron"
-require_rootfs_executable "usr/share/mgrserver-defaults/pxe/up_pxe_res.sh"
+require_rootfs_executable "usr/share/mgrserver-defaults/res/pxe/up_pxe_res.sh"
 
 verify_mac80211_runtime_compat() {
   local rel=""
@@ -1408,7 +1408,7 @@ verify_pxe_download_engine() {
   local tmp=""
 
   tmp=$(mktemp /tmp/rootfs-pxe-updater.XXXXXX)
-  if ! extract_rootfs_member "usr/share/mgrserver-defaults/pxe/up_pxe_res.sh" "$tmp"; then
+  if ! extract_rootfs_member "usr/share/mgrserver-defaults/res/pxe/up_pxe_res.sh" "$tmp"; then
     rm -f "$tmp"
     echo "✗ ERROR: failed to extract PXE updater for download-engine verification"
     exit 1
