@@ -1151,7 +1151,17 @@ jobs:
           cache-dependency-path: |
             mgrserver-src/pnpm-lock.yaml
 
+      - name: Extract MgrServer version
+        id: mgrserver_version
+        run: |
+          version=$(jq -r '.version // "0.0.0"' "$GITHUB_WORKSPACE/mgrserver-src/packages/server/package.json")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "MgrServer version: $version"
+
       - name: Build and stage MgrServer overlay
+        env:
+          MGRSERVER_BUILD_ID: "${{ steps.mgrserver_ref.outputs.commit }}-${{ github.run_number }}"
+          MGRSERVER_VERSION: "${{ steps.mgrserver_version.outputs.version }}"
         run: bash "$GITHUB_WORKSPACE/scripts/stage-mgrserver-overlay.sh"
 
       - name: Initialization environment
