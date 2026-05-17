@@ -260,7 +260,35 @@ if [ "$HOME_ON_OVERLAY" != '1' ]; then
     run_init_script fstab enable >/dev/null 2>&1 || true
 fi
 
-sync_pxe_defaults || true
+# 将 MgrServer 默认工具文件（启动器等）从固件只读区同步到 /home/tools
+sync_tools_defaults() {
+    local src="/usr/share/mgrserver-defaults/res"
+    local dst="/home/tools/launcher"
+
+    [ -d "$src" ] || { echo "Tools source directory missing: $src"; return 0; }
+
+    mkdir -p "$dst"
+
+    # launcher
+    local launcher_src="$src/yushu-tool-launcher.exe"
+    local launcher_dst="$dst/yushu-tool-launcher.exe"
+
+    if [ -f "$launcher_src" ] && { [ ! -f "$launcher_dst" ] || [ ! -s "$launcher_dst" ]; }; then
+        cp "$launcher_src" "$launcher_dst" 2>/dev/null \
+            || { echo "Failed to copy launcher from $launcher_src"; return 1; }
+        echo "Launcher seeded: $launcher_src -> $launcher_dst"
+    elif [ -f "$launcher_dst" ]; then
+        echo "Launcher already present: $launcher_dst"
+    fi
+
+    return 0
+}
+
+# 仅在 /home 分区正常挂载时同步默认文件（overlay 回退路径会被丢弃，不应写入）
+if [ "$HOME_ON_OVERLAY" != '1' ]; then
+    sync_pxe_defaults || true
+    sync_tools_defaults || true
+fi
 
 if [ "$HOME_ON_OVERLAY" = '1' ]; then
     echo "/home fallback ready on overlay: $TARGET (will retry partition setup on next boot)"
