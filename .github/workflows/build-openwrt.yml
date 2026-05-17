@@ -526,6 +526,12 @@ jobs:
           echo "Hydrated target/package cache contents:"
           du -sh "$CACHE_ROOT" || true
 
+          echo "Touching build stamps so make sees cached packages as up-to-date..."
+          find "$OPENWRT_ROOT/build_dir" -type f \( -name '.built' -o -name '.configured' -o -name '.prepared' -o -name '.stamp_*' \) -exec touch -c {} + 2>/dev/null || true
+          find "$OPENWRT_ROOT/staging_dir" -type f \( -name '.stamp_*' -o -name '.built' \) -exec touch -c {} + 2>/dev/null || true
+          find "$OPENWRT_ROOT/bin/packages" -type f -name '*.ipk' -exec touch -c {} + 2>/dev/null || true
+          echo "Build stamps refreshed."
+
       - name: SSH connection to Actions
         uses: P3TERX/ssh2actions@v1.0.0
         if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
@@ -1552,6 +1558,17 @@ jobs:
 
           echo "Hydrated target/package cache contents:"
           du -sh "$CACHE_ROOT" || true
+
+      - name: Refresh build stamps
+        shell: bash
+        run: |
+          set -euo pipefail
+          OPENWRT_ROOT="$GITHUB_WORKSPACE/openwrt"
+          echo "Touching build stamps so make sees cached packages as up-to-date..."
+          find "$OPENWRT_ROOT/build_dir" -type f \( -name '.built' -o -name '.configured' -o -name '.prepared' -o -name '.stamp_*' \) -exec touch -c {} + 2>/dev/null || true
+          find "$OPENWRT_ROOT/staging_dir" -type f \( -name '.stamp_*' -o -name '.built' \) -exec touch -c {} + 2>/dev/null || true
+          find "$OPENWRT_ROOT/bin/packages" -type f -name '*.ipk' -exec touch -c {} + 2>/dev/null || true
+          echo "Build stamps refreshed."
 
       - name: SSH connection to Actions
         uses: P3TERX/ssh2actions@v1.0.0
