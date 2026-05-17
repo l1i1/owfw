@@ -568,6 +568,7 @@ jobs:
           require_config "CONFIG_PACKAGE_parted=y"
           require_config "CONFIG_PACKAGE_hostapd-utils=y"
           require_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
+          require_config "CONFIG_PACKAGE_socat=y"
 
       - name: Warm tools and toolchain cache
         run: |
@@ -875,6 +876,7 @@ jobs:
           require_config "CONFIG_PACKAGE_parted=y"
           require_config "CONFIG_PACKAGE_hostapd-utils=y"
           require_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
+          require_config "CONFIG_PACKAGE_socat=y"
 
       - name: Compile base firmware
         id: compile
@@ -1593,6 +1595,7 @@ jobs:
           require_config "CONFIG_PACKAGE_parted=y"
           require_config "CONFIG_PACKAGE_hostapd-utils=y"
           require_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
+          require_config "CONFIG_PACKAGE_socat=y"
 
       - name: Warm tools and toolchain cache
         run: |
