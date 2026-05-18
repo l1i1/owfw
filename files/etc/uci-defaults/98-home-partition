@@ -144,6 +144,19 @@ sync_pxe_defaults() {
     return 0
 }
 
+apply_pxe_setup() {
+    local script="$PXE_TARGET/set_pxe.sh"
+
+    [ -f "$script" ] || { echo "PXE setup skipped: $script missing"; return 0; }
+    chmod +x "$script" 2>/dev/null || true
+
+    OFFLINE_STRICT=true QUIET=1 /bin/sh "$script" \
+        || { echo "PXE setup failed: $script"; return 1; }
+
+    echo "PXE setup applied: $script"
+    return 0
+}
+
 mounted_source_for_target() {
     awk -v target="$1" '$2 == target {print $1; exit}' /proc/mounts 2>/dev/null
 }
@@ -287,6 +300,7 @@ sync_tools_defaults() {
 # 仅在 /home 分区正常挂载时同步默认文件（overlay 回退路径会被丢弃，不应写入）
 if [ "$HOME_ON_OVERLAY" != '1' ]; then
     sync_pxe_defaults || true
+    apply_pxe_setup || true
     sync_tools_defaults || true
 fi
 

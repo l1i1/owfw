@@ -58,6 +58,13 @@ echo "Staging PXE resources..."
 mkdir -p "$PXE_DEST"
 cp -a "$PXE_SRC/pxe/." "$PXE_DEST/"
 
+if [ -d "$PXE_DEST/res" ]; then
+  (
+    cd "$PXE_DEST/res"
+    find . -type f | sed 's|^\./||' | sort > filelist.txt
+  )
+fi
+
 if [ -d "$PXE_SRC/util" ]; then
   mkdir -p "$PXE_DEST/util"
   find "$PXE_SRC/util" -maxdepth 1 -type f -name "*.sh" -exec cp {} "$PXE_DEST/util/" \;

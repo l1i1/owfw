@@ -891,8 +891,10 @@ require_rootfs_entry "etc/config/easytier"
 require_rootfs_entry "usr/lib/lua/luci/controller/easytier.lua"
 require_rootfs_entry "usr/share/rpcd/acl.d/luci-app-easytier.json"
 require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/config.ini"
+require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/set_pxe.sh"
 require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/up_pxe_res.sh"
 require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/tftpboot"
+require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/res/pe-menu.exe"
 require_rootfs_entry "root/mgrserver/commands.json"
 require_rootfs_entry "root/mgrserver/web-dist/index.html"
 require_rootfs_entry "usr/bin/node"
@@ -919,7 +921,67 @@ require_rootfs_executable "etc/uci-defaults/98-home-partition"
 require_rootfs_executable "etc/uci-defaults/99-mgrserver-ports"
 require_rootfs_executable "etc/uci-defaults/99-restrict-admin-vpn"
 require_rootfs_executable "etc/uci-defaults/99-service-watchdog-cron"
+require_rootfs_executable "usr/share/mgrserver-defaults/res/pxe/set_pxe.sh"
 require_rootfs_executable "usr/share/mgrserver-defaults/res/pxe/up_pxe_res.sh"
+
+verify_pxe_defaults_runtime_assets() {
+  local tmp=""
+
+  if ! grep -Fq 'find . -type f' "$WORKSPACE_ROOT/scripts/stage-mgrserver-overlay.sh" || \
+     ! grep -Fq "sort > filelist.txt" "$WORKSPACE_ROOT/scripts/stage-mgrserver-overlay.sh"; then
+    echo "✗ ERROR: PXE staging does not generate res/filelist.txt from staged files"
+    exit 1
+  fi
+
+  tmp=$(mktemp /tmp/rootfs-pxe-filelist.XXXXXX)
+  if ! extract_rootfs_member "usr/share/mgrserver-defaults/res/pxe/res/filelist.txt" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract PXE res/filelist.txt"
+    exit 1
+  fi
+
+  if ! grep -Fxq 'pe-menu.exe' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE res/filelist.txt does not include pe-menu.exe"
+    exit 1
+  fi
+  rm -f "$tmp"
+
+  tmp=$(mktemp /tmp/rootfs-pxe-set.XXXXXX)
+  if ! extract_rootfs_member "usr/share/mgrserver-defaults/res/pxe/set_pxe.sh" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: failed to extract PXE set_pxe.sh"
+    exit 1
+  fi
+
+  if ! grep -Fq '[ -f "$TFTP_ROOT/undionly.kpxe" ]' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE set_pxe.sh does not guard undionly.kpxe DHCP option"
+    exit 1
+  fi
+
+  if ! grep -Fq 'dhcp_option="67,/ipxe.efi"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE set_pxe.sh does not fall back to ipxe.efi"
+    exit 1
+  fi
+
+  if ! grep -Fq 'find "$PXE_ROOT" -type f -name "*.sh" -exec chmod +x {} \;' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE set_pxe.sh does not preserve executable bits for updater scripts"
+    exit 1
+  fi
+
+  if grep -Fq 'uci delete dhcp.${DNSMASQ_SECTION}.dhcp_option' "$tmp" || \
+     grep -Fq 'uci delete dhcp.lan.dhcp_option' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE set_pxe.sh clears unrelated DHCP options"
+    exit 1
+  fi
+
+  rm -f "$tmp"
+  echo "✓ PXE defaults include pe-menu.exe download metadata and guarded bootfile selection"
+}
 
 verify_mac80211_runtime_compat() {
   local rel=""
@@ -1257,6 +1319,14 @@ verify_uci_defaults_boot_semantics() {
     exit 1
   fi
 
+  if ! grep -Fq 'apply_pxe_setup()' "$tmp" || \
+     ! grep -Fq '[ -f "$script" ]' "$tmp" || \
+     ! grep -Fq 'OFFLINE_STRICT=true QUIET=1 /bin/sh "$script"' "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: /etc/uci-defaults/98-home-partition does not apply PXE setup in offline mode"
+    exit 1
+  fi
+
   rm -f "$tmp"
 
   tmp=$(mktemp /tmp/rootfs-ports-defaults.XXXXXX)
@@ -1443,6 +1513,7 @@ verify_health_check_script
 verify_rc_common_selfheal_script
 verify_uci_defaults_boot_semantics
 verify_rom_rc_common_runtime_calls
+verify_pxe_defaults_runtime_assets
 verify_pxe_download_engine
 
 require_prebuilt_manifest_dependencies "$WORKSPACE_ROOT/prebuilt-ipk-metadata.txt"
