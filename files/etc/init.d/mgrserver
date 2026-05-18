@@ -12,8 +12,8 @@ PIDFILE="/var/run/${SERVICE_NAME}.pid"
 HEALTH_CHECK_INTERVAL=30
 HEALTH_CHECK_URL="http://127.0.0.1:%s/api/health"
 LOG_DIR="/var/log/mgrserver"
-MAX_LOG_SIZE="1M"
-MAX_LOG_FILES=3
+MAX_LOG_SIZE="2M"
+MAX_LOG_FILES=5
 
 # Logging helper
 log_msg() {

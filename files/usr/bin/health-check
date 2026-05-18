@@ -95,7 +95,17 @@ check_http() {
   local url="$2"
   local timeout="${3:-5}"
   
-  if curl -s --connect-timeout "$timeout" --max-time "$((timeout * 2))" "$url" >/dev/null 2>&1; then
+  if command -v curl >/dev/null 2>&1; then
+    curl -s --connect-timeout "$timeout" --max-time "$((timeout * 2))" "$url" >/dev/null 2>&1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -T "$((timeout * 2))" -O /dev/null "$url" >/dev/null 2>&1
+  else
+    echo -e "${RED}[FAIL]${NC} $name HTTP (no curl or wget available)"
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
+  local rc=$?
+  if [ $rc -eq 0 ]; then
     echo -e "${GREEN}[OK]${NC} $name HTTP"
     return 0
   else
