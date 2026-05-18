@@ -1,0 +1,16 @@
+#!/bin/sh
+# Fix EasyTier boot order: must start before MgrServer (START=95).
+# EasyTier package defaults to START=99 which causes MgrServer keepalive
+# to start monitoring before EasyTier is ready.
+set -e
+
+INIT_SCRIPT="/etc/init.d/easytier"
+
+if [ -f "$INIT_SCRIPT" ]; then
+  # Change START=99 → START=90 so EasyTier starts before MgrServer (95)
+  sed -i 's/^START=[0-9]*$/START=90/' "$INIT_SCRIPT"
+  # Re-enable to recreate /etc/rc.d/S90easytier symlink
+  "$INIT_SCRIPT" enable
+fi
+
+exit 0
