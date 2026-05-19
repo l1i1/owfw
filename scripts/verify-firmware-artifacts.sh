@@ -960,9 +960,16 @@ verify_pxe_defaults_runtime_assets() {
     exit 1
   fi
 
-  if ! grep -Fq 'dhcp_option="67,/ipxe.efi"' "$tmp"; then
+  if ! grep -Fq "add_pxe_boot 'ipxe.efi' efi64" "$tmp"; then
     rm -f "$tmp"
-    echo "✗ ERROR: PXE set_pxe.sh does not fall back to ipxe.efi"
+    echo "✗ ERROR: PXE set_pxe.sh does not provide UEFI ipxe.efi boot rule"
+    exit 1
+  fi
+
+  if ! grep -Fq "add_pxe_match ipxe '175'" "$tmp" || \
+     ! grep -Fq "add_pxe_boot 'autoexec.ipxe' ipxe" "$tmp"; then
+    rm -f "$tmp"
+    echo "✗ ERROR: PXE set_pxe.sh does not chain iPXE clients to autoexec.ipxe"
     exit 1
   fi
 
