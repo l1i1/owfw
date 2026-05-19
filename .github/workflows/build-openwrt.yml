@@ -1671,38 +1671,20 @@ jobs:
           OPENWRT_COMMIT_SHORT="$(printf '%s' "${{ steps.openwrt_ref.outputs.commit }}" | cut -c1-12)"
           echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
           touch release.txt
-          echo "## 京东云亚瑟 AX1800 Pro OpenWrt 固件 (含 MgrServer)" >> release.txt
+          echo "## OWFW AX1.8K Pro" >> release.txt
           echo "" >> release.txt
           echo "### 固件信息" >> release.txt
           echo "- 源码: ${REPO_DISPLAY_NAME} (${REPO_BRANCH})" >> release.txt
           echo "- OpenWrt Commit: ${OPENWRT_COMMIT_SHORT}" >> release.txt
-          echo "- 设备: JDCloud RE-SS-01 (AX1800 Pro)" >> release.txt
           echo "- 编译时间: $(date +"%Y-%m-%d %H:%M")" >> release.txt
           echo "" >> release.txt
           echo "### MgrServer 叠加层" >> release.txt
           echo "- 仓库: ${{ steps.mgrserver_ref.outputs.repo }}" >> release.txt
           echo "- 分支: ${{ steps.mgrserver_ref.outputs.branch }}" >> release.txt
           echo "- Commit: ${MGRSERVER_COMMIT_SHORT}" >> release.txt
-          echo "" >> release.txt
-          echo "### 已包含" >> release.txt
-          echo "- MgrServer (路由器管理后台, 端口 80)" >> release.txt
-          echo "- Node.js 22.x + npm" >> release.txt
-          echo "- Python3 (25 子包)" >> release.txt
-          echo "- aria2（跟随当前源码树编译，用于 PXE 资源下载）" >> release.txt
-          echo "- sing-box (预编译 IPK，已校验 kmod-tun / kmod-inet-diag / kmod-nft-queue)" >> release.txt
-          echo "- easytier v2.5.0 + luci-app-easytier (预编译 IPK，已校验 kmod-tun / luci-compat)" >> release.txt
           if [ "${HAS_QCA_NSS_DP:-false}" = "true" ]; then
             echo "- qca-nss-dp 数据通路加速" >> release.txt
           fi
-          echo "- hostapd-utils（WPS PBC 所需 hostapd_cli）" >> release.txt
-          echo "- miniupnpd（UPnP 管理）" >> release.txt
-          echo "- PXE 默认资源（首启同步到 /home/pxe）" >> release.txt
-          echo "- /home 分区自动挂载" >> release.txt
-          echo "" >> release.txt
-          echo "### 默认设置" >> release.txt
-          echo "- MgrServer: http://192.168.1.1 (密码: password)" >> release.txt
-          echo "- LuCI: http://192.168.1.1:3500" >> release.txt
-          echo "- 用户名: root" >> release.txt
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Upload firmware to release
