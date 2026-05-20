@@ -75,12 +75,27 @@ MANIFEST=$(find . -name "*.manifest" | head -1)
 CONFIG_BUILDINFO=$(find . -name "config.buildinfo" | head -1)
 PROFILES_JSON=$(find . -name "profiles.json" | head -1)
 
-for file in "$MANIFEST" "$CONFIG_BUILDINFO" "$PROFILES_JSON"; do
-  if [ -z "$file" ] || [ ! -f "$file" ]; then
-    echo "✗ ERROR: required metadata file missing"
-    exit 1
+METADATA_OK=1
+for pair in "MANIFEST:$MANIFEST" "CONFIG_BUILDINFO:$CONFIG_BUILDINFO" "PROFILES_JSON:$PROFILES_JSON"; do
+  label="${pair%%:*}"
+  file="${pair#*:}"
+  if [ -z "$file" ]; then
+    echo "✗ ERROR: $label not found (no matching file)"
+    METADATA_OK=0
+  elif [ ! -f "$file" ]; then
+    echo "✗ ERROR: $label is not a regular file: $file"
+    METADATA_OK=0
+  else
+    echo "✓ $label found: $file"
   fi
 done
+
+if [ "$METADATA_OK" -eq 0 ]; then
+  echo ""
+  echo "Contents of firmware directory for diagnostics:"
+  ls -la
+  exit 1
+fi
 
 require_build_config() {
   local pattern="$1"
