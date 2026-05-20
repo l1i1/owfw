@@ -1635,6 +1635,9 @@ jobs:
               make target/install -j$(nproc) V=s || make target/install -j1 V=s
             fi
           fi
+          # target/install does not run the top-level world post-build targets.
+          # Generate the profiles.json metadata required by artifact verification.
+          make json_overview_image_info V=s
           echo "ccache stats after assembly:"
           ccache -s || true
           echo "status=success" >> $GITHUB_OUTPUT
