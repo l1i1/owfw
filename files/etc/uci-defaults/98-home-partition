@@ -181,7 +181,7 @@ if [ "$HOME_ON_OVERLAY" != '1' ] && [ -z "$PART" ]; then
         PART_START_MIB=$(parted -ms "$DISK" unit MiB print 2>/dev/null \
             | awk -F: '$1 ~ /^[0-9]+$/ {gsub("MiB", "", $3); end=$3} END {if (end == "") print ""; else printf "%d", int(end) + 1}')
         [ -n "$PART_START_MIB" ] || PART_START_MIB='1'
-        parted -s "$DISK" mkpart primary ext4 "${PART_START_MIB}MiB" 100% \
+        timeout 30 parted -s "$DISK" mkpart primary ext4 "${PART_START_MIB}MiB" 100% \
             || { echo "parted failed, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
     else
         echo 'parted not available, falling back to overlay /home.'
@@ -234,7 +234,7 @@ if [ "$HOME_ON_OVERLAY" != '1' ]; then
     fi
 fi
 if [ "$HOME_ON_OVERLAY" != '1' ] && { [ "$CREATED_PART" = '1' ] || [ -z "$PART_FSTYPE" ]; }; then
-    mkfs.ext4 -F "$PART" >/dev/null \
+    timeout 60 mkfs.ext4 -F "$PART" >/dev/null \
         || { echo "mkfs.ext4 failed on $PART, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
     PART_FSTYPE='ext4'
 fi
@@ -253,8 +253,8 @@ if [ "$HOME_ON_OVERLAY" != '1' ] && [ -n "${CURR_SRC:-}" ]; then
     fi
 fi
 if [ "$HOME_ON_OVERLAY" != '1' ] && [ "$SKIP_MOUNT" != '1' ]; then
-    mount "$PART" "$TARGET" 2>/dev/null \
-        || mount -t "$PART_FSTYPE" "$PART" "$TARGET" \
+    timeout 10 mount "$PART" "$TARGET" 2>/dev/null \
+        || timeout 10 mount -t "$PART_FSTYPE" "$PART" "$TARGET" \
         || { echo "mount failed, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
 fi
 

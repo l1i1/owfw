@@ -255,19 +255,21 @@ check_memory 50
 
 echo ""
 echo "=== Network Connectivity ==="
-if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+# Run both pings in parallel to avoid sequential timeout (2×3s → 3s worst-case)
+ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1 & PING8_PID=$!
+ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1 & PING1_PID=$!
+wait $PING8_PID && {
   echo -e "${GREEN}[OK]${NC} Internet connectivity (8.8.8.8)"
-else
+} || {
   echo -e "${YELLOW}[WARN]${NC} Internet connectivity (8.8.8.8 unreachable)"
   WARNINGS=$((WARNINGS + 1))
-fi
-
-if ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1; then
+}
+wait $PING1_PID && {
   echo -e "${GREEN}[OK]${NC} Internet connectivity (1.1.1.1)"
-else
+} || {
   echo -e "${YELLOW}[WARN]${NC} Internet connectivity (1.1.1.1 unreachable)"
   WARNINGS=$((WARNINGS + 1))
-fi
+}
 
 echo ""
 echo "============================================"
