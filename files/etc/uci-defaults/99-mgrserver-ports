@@ -146,6 +146,7 @@ done
 
 if [ "$NGINX_ENABLED" != "1" ]; then
   uci set uhttpd."$UHTTPD_SECTION".enabled="1"
+  uci set uhttpd."$UHTTPD_SECTION".rfc1918_filter="0"
   uci_delete_quiet uhttpd."$UHTTPD_SECTION".listen_http
   uci_delete_quiet uhttpd."$UHTTPD_SECTION".listen_https
   uci add_list uhttpd."$UHTTPD_SECTION".listen_http="0.0.0.0:$LUCI_PORT"

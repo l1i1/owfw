@@ -1,11 +1,12 @@
 #!/bin/sh
-# Restrict LuCI (3500) and SSH (22) to VPN (easytier) only.
+# Restrict LuCI (3500) and SSH (22) to the management VPN subnet.
 #
 # Two-layer enforcement:
-#   Layer 1 — UCI DROP rules on LAN zone (always works)
-#   Layer 2 — nftables insert at position 0 of inet fw4 input (accepts
-#             VPN iface traffic before zone jumps so the DROP rules in
-#             input_lan are skipped for VPN-originated packets).
+#   Layer 1 — UCI ACCEPT rules for the management CIDR.
+#   Layer 2 — UCI DROP rules on LAN zone (always works).
+#   Layer 3 — nftables insert at position 0 of inet fw4 input (accepts
+#             management VPN traffic before zone jumps so DROP rules are
+#             skipped for VPN-originated packets).
 #
 # A fw4 script-type include handles firewall reloads; an init script
 # (START=99) acts as a fallback on boot if the fw4 include doesn't run.
@@ -18,6 +19,7 @@ LOCK="/tmp/.restrict-admin-firewall-done"
 [ -f "$LOCK" ] && exit 0
 
 ADMIN_PORTS="22 3500"
+ADMIN_MGMT_CIDR="10.126.126.0/24"
 FIX_SCRIPT="/etc/firewall.vpn-admin-fix"
 INIT_SCRIPT="/etc/init.d/vpn-admin-firewall"
 
@@ -29,6 +31,9 @@ log_msg() {
 # 1. Dropbear hardening
 # --------------------------------------------------------------
 if uci -q get dropbear.@dropbear[0] >/dev/null 2>&1; then
+  # OpenWrt images may default Dropbear to Interface=lan, which only listens
+  # on 192.168.2.1 and misses the EasyTier/tun management address.
+  uci -q delete dropbear.@dropbear[0].Interface 2>/dev/null || true
   uci set dropbear.@dropbear[0].GatewayPorts="0"
   uci set dropbear.@dropbear[0].PasswordAuth="on"
   uci set dropbear.@dropbear[0].RootPasswordAuth="on"
@@ -41,21 +46,22 @@ fi
 # --------------------------------------------------------------
 cat > "$FIX_SCRIPT" <<'FIXSCRIPT'
 #!/bin/sh
-# Insert ACCEPT rules at position 0 of inet fw4 input so VPN
-# traffic is accepted before zone jumps dispatch it to input_lan
-# (where the DROP rules live).
+# Insert ACCEPT rules at position 0 of inet fw4 input so management
+# VPN traffic is accepted before zone jumps dispatch it to later rules.
 
 CHAIN="inet fw4 input"
-IFACE_GLOBS="easytier* tunl*"
+ADMIN_MGMT_CIDR="10.126.126.0/24"
+IFACE_GLOBS="tun0 et_tun easytier* tunl*"
 
 # Verify the target chain exists (fw4 is loaded)
 nft list chain $CHAIN >/dev/null 2>&1 || exit 0
 
 # Check if rules are already present (idempotency)
-if nft list chain $CHAIN 2>/dev/null | grep -qF 'iifname "easytier'; then
+if nft list chain $CHAIN 2>/dev/null | grep -qF "ip saddr $ADMIN_MGMT_CIDR tcp dport"; then
   exit 0
 fi
 
+nft insert rule $CHAIN ip saddr $ADMIN_MGMT_CIDR tcp dport { 22, 3500 } accept 2>/dev/null || true
 for glob in $IFACE_GLOBS; do
   nft insert rule $CHAIN iifname "$glob" tcp dport { 22, 3500 } accept 2>/dev/null || true
 done
@@ -98,9 +104,23 @@ if [ -x /etc/rc.common ] || [ -f /rom/etc/rc.common ]; then
 fi
 
 # --------------------------------------------------------------
-# 5. UCI DROP rules — LAN input → ports 22, 3500
+# 5. UCI admin rules
 # --------------------------------------------------------------
+uci -q delete firewall.easytier_ssh 2>/dev/null || true
 for port in $ADMIN_PORTS; do
+  uci -q delete firewall."easytier_luci_${port}" 2>/dev/null || true
+
+  uci -q delete firewall."allow_mgmt_admin_${port}" 2>/dev/null || true
+  uci set firewall."allow_mgmt_admin_${port}"=rule
+  uci set firewall."allow_mgmt_admin_${port}".name="Allow-management-admin-${port}"
+  uci set firewall."allow_mgmt_admin_${port}".src="*"
+  uci set firewall."allow_mgmt_admin_${port}".src_ip="$ADMIN_MGMT_CIDR"
+  uci set firewall."allow_mgmt_admin_${port}".proto="tcp"
+  uci set firewall."allow_mgmt_admin_${port}".dest_port="$port"
+  uci set firewall."allow_mgmt_admin_${port}".target="ACCEPT"
+  uci set firewall."allow_mgmt_admin_${port}".family="ipv4"
+  uci set firewall."allow_mgmt_admin_${port}".enabled="1"
+
   uci -q delete firewall."block_lan_admin_${port}" 2>/dev/null || true
   uci set firewall."block_lan_admin_${port}"=rule
   uci set firewall."block_lan_admin_${port}".name="Block-LAN-admin-${port}"
@@ -124,8 +144,14 @@ if /etc/init.d/firewall enabled 2>/dev/null; then
   sleep 1
   "$FIX_SCRIPT" 2>/dev/null || true
 
-  # Verify DROP rules made it into the live ruleset
+  # Verify rules made it into the live ruleset
   for port in $ADMIN_PORTS; do
+    if nft list chain inet fw4 input 2>/dev/null | grep -q "saddr $ADMIN_MGMT_CIDR.*dport.*$port.*accept"; then
+      log_msg "verified: port $port management ACCEPT rule active"
+    else
+      log_msg "WARNING: port $port management ACCEPT rule not found in nftables"
+    fi
+
     if nft list chain inet fw4 input_lan 2>/dev/null | grep -q "dport $port.*drop"; then
       log_msg "verified: port $port DROP rule active"
     else
