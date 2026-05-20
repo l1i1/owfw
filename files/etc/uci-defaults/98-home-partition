@@ -31,8 +31,20 @@ run_init_script() {
     "$script" "$@"
 }
 
+run_with_timeout() {
+    local seconds="$1"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$seconds" "$@"
+        return $?
+    fi
+
+    "$@"
+}
+
 part_size_mib() {
-    awk -v name="${1##*/}" '$4 == name {print int($3 / 2048)}' /proc/partitions 2>/dev/null | tail -n1
+    awk -v name="${1##*/}" '$4 == name {print int($3 / 1024)}' /proc/partitions 2>/dev/null | tail -n1
 }
 
 part_name() {
@@ -161,6 +173,17 @@ mounted_source_for_target() {
     awk -v target="$1" '$2 == target {print $1; exit}' /proc/mounts 2>/dev/null
 }
 
+unmount_duplicate_part_mounts() {
+    local device="$1"
+    local target="$2"
+
+    awk -v device="$device" -v target="$target" '$1 == device && $2 != target {print $2}' /proc/mounts 2>/dev/null |
+        while read -r mount_point; do
+            [ -n "$mount_point" ] || continue
+            umount "$mount_point" 2>/dev/null || true
+        done
+}
+
 # 仅在 eMMC 设备存在时执行
 if [ ! -b "$DISK" ]; then
     echo "Disk device not found: $DISK, falling back to overlay /home"
@@ -181,7 +204,7 @@ if [ "$HOME_ON_OVERLAY" != '1' ] && [ -z "$PART" ]; then
         PART_START_MIB=$(parted -ms "$DISK" unit MiB print 2>/dev/null \
             | awk -F: '$1 ~ /^[0-9]+$/ {gsub("MiB", "", $3); end=$3} END {if (end == "") print ""; else printf "%d", int(end) + 1}')
         [ -n "$PART_START_MIB" ] || PART_START_MIB='1'
-        timeout 30 parted -s "$DISK" mkpart primary ext4 "${PART_START_MIB}MiB" 100% \
+        run_with_timeout 30 parted -s "$DISK" mkpart primary ext4 "${PART_START_MIB}MiB" 100% \
             || { echo "parted failed, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
     else
         echo 'parted not available, falling back to overlay /home.'
@@ -234,7 +257,7 @@ if [ "$HOME_ON_OVERLAY" != '1' ]; then
     fi
 fi
 if [ "$HOME_ON_OVERLAY" != '1' ] && { [ "$CREATED_PART" = '1' ] || [ -z "$PART_FSTYPE" ]; }; then
-    timeout 60 mkfs.ext4 -F "$PART" >/dev/null \
+    run_with_timeout 60 mkfs.ext4 -F "$PART" >/dev/null \
         || { echo "mkfs.ext4 failed on $PART, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
     PART_FSTYPE='ext4'
 fi
@@ -253,9 +276,12 @@ if [ "$HOME_ON_OVERLAY" != '1' ] && [ -n "${CURR_SRC:-}" ]; then
     fi
 fi
 if [ "$HOME_ON_OVERLAY" != '1' ] && [ "$SKIP_MOUNT" != '1' ]; then
-    timeout 10 mount "$PART" "$TARGET" 2>/dev/null \
-        || timeout 10 mount -t "$PART_FSTYPE" "$PART" "$TARGET" \
+    run_with_timeout 10 mount "$PART" "$TARGET" 2>/dev/null \
+        || run_with_timeout 10 mount -t "$PART_FSTYPE" "$PART" "$TARGET" \
         || { echo "mount failed, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
+fi
+if [ "$HOME_ON_OVERLAY" != '1' ]; then
+    unmount_duplicate_part_mounts "$PART" "$TARGET"
 fi
 
 # 写入 fstab 持久化（使用双引号使变量正确展开）
