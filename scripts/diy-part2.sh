@@ -193,9 +193,13 @@ echo "# CONFIG_NODEJS_20 is not set" >> .config
 echo "# CONFIG_NODEJS_24 is not set" >> .config
 echo "# CONFIG_NODEJS_25 is not set" >> .config
 
-# 重新生成配置
-echo "  Running make defconfig..."
-make defconfig
+# 重新生成配置（overlay 阶段通过 SKIP_MAKE_DEFCONFIG=1 跳过，避免与后续 step 重复执行）
+if [ "${SKIP_MAKE_DEFCONFIG:-}" != "1" ]; then
+  echo "  Running make defconfig..."
+  make defconfig
+else
+  echo "  Skipping make defconfig (SKIP_MAKE_DEFCONFIG=1)"
+fi
 
 # 验证配置
 echo "  Verifying Node.js configuration..."

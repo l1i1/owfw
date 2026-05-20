@@ -526,10 +526,13 @@ jobs:
           echo "Hydrated target/package cache contents:"
           du -sh "$CACHE_ROOT" || true
 
-          echo "Touching build stamps so make sees cached packages as up-to-date..."
+          # Touching order matters for make's dependency resolution:
+          #   IPKs are prerequisites for install stamps — touch IPKs FIRST,
+          #   stamps LAST, so stamps are newer than IPKs → make skips install.
+          echo "Touching cached artifacts so make skips already-built packages..."
+          find "$OPENWRT_ROOT/bin/packages" -type f -name '*.ipk' -exec touch -c {} + 2>/dev/null || true
           find "$OPENWRT_ROOT/build_dir" -type f \( -name '.built' -o -name '.configured' -o -name '.prepared' -o -name '.stamp_*' \) -exec touch -c {} + 2>/dev/null || true
           find "$OPENWRT_ROOT/staging_dir" -type f \( -name '.stamp_*' -o -name '.built' \) -exec touch -c {} + 2>/dev/null || true
-          find "$OPENWRT_ROOT/bin/packages" -type f -name '*.ipk' -exec touch -c {} + 2>/dev/null || true
           echo "Build stamps refreshed."
 
       - name: SSH connection to Actions
@@ -576,13 +579,6 @@ jobs:
           require_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
           require_config "CONFIG_PACKAGE_socat=y"
 
-      - name: Warm tools and toolchain cache
-        run: |
-          cd openwrt
-          echo "Building host tools and toolchain incrementally..."
-          make tools/install -j"$(nproc)" || make tools/install -j1 V=s
-          make toolchain/install -j"$(nproc)" || make toolchain/install -j1 V=s
-
       - name: Compile kernel
         id: compile_kernel
         run: |
@@ -590,7 +586,9 @@ jobs:
           echo "ccache stats before kernel compile:"
           ccache -s || true
           echo -e "$(nproc) thread kernel compile"
-          make target/linux/compile -j$(nproc) || make target/linux/compile -j1 V=s
+          # make target/linux/compile resolves tools + toolchain as transitive deps;
+          # stamps are touched by Hydrate step above, so cache-hit = instant skip.
+          make target/linux/compile -j$(nproc) V=s || make target/linux/compile -j1 V=s
           echo "ccache stats after kernel compile:"
           ccache -s || true
           echo "status=success" >> $GITHUB_OUTPUT
@@ -1440,6 +1438,8 @@ jobs:
         run: bash "$GITHUB_WORKSPACE/scripts/extract-prebuilt-ipks.sh"
 
       - name: Load custom configuration
+        env:
+          SKIP_MAKE_DEFCONFIG: "1"
         run: |
           [ -e files ] && cp -r files openwrt/files
           if [ -d package ]; then
@@ -1564,10 +1564,13 @@ jobs:
         run: |
           set -euo pipefail
           OPENWRT_ROOT="$GITHUB_WORKSPACE/openwrt"
-          echo "Touching build stamps so make sees cached packages as up-to-date..."
+          # Touching order matters for make's dependency resolution:
+          #   IPKs are prerequisites for install stamps — touch IPKs FIRST,
+          #   stamps LAST, so stamps are newer than IPKs → make skips install.
+          echo "Touching cached artifacts so make skips already-built packages..."
+          find "$OPENWRT_ROOT/bin/packages" -type f -name '*.ipk' -exec touch -c {} + 2>/dev/null || true
           find "$OPENWRT_ROOT/build_dir" -type f \( -name '.built' -o -name '.configured' -o -name '.prepared' -o -name '.stamp_*' \) -exec touch -c {} + 2>/dev/null || true
           find "$OPENWRT_ROOT/staging_dir" -type f \( -name '.stamp_*' -o -name '.built' \) -exec touch -c {} + 2>/dev/null || true
-          find "$OPENWRT_ROOT/bin/packages" -type f -name '*.ipk' -exec touch -c {} + 2>/dev/null || true
           echo "Build stamps refreshed."
 
       - name: SSH connection to Actions
@@ -1614,22 +1617,25 @@ jobs:
           require_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
           require_config "CONFIG_PACKAGE_socat=y"
 
-      - name: Warm tools and toolchain cache
-        run: |
-          cd openwrt
-          echo "Reusing host tools and toolchain from base build cache..."
-          make tools/install -j"$(nproc)" || make tools/install -j1 V=s
-          make toolchain/install -j"$(nproc)" || make toolchain/install -j1 V=s
-
-      - name: Compile the firmware
+      - name: Assemble overlay firmware image from cached packages
         id: compile
         run: |
+          set -euo pipefail
           cd openwrt
-          echo "ccache stats before compile:"
+          echo "ccache stats before assembly:"
           ccache -s || true
-          echo -e "$(nproc) thread compile"
-          make -j$(nproc) || make -j1 || make -j1 V=s
-          echo "ccache stats after compile:"
+          echo -e "$(nproc) thread assembly"
+          # All packages are prebuilt in cache (stamps + IPKs hydrated from base build).
+          # Only image generation with the new files/ overlay (MgrServer bundle) is needed.
+          if ! make target/install -j$(nproc) V=s; then
+            echo "target/install failed with $(nproc) threads, retrying single-thread..."
+            if ! make target/install -j1 V=s; then
+              echo "Stamps may be stale, rebuilding packages from cache..."
+              make package/compile -j$(nproc) V=s || make package/compile -j1 V=s || exit 1
+              make target/install -j$(nproc) V=s || make target/install -j1 V=s
+            fi
+          fi
+          echo "ccache stats after assembly:"
           ccache -s || true
           echo "status=success" >> $GITHUB_OUTPUT
           grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
@@ -1682,9 +1688,6 @@ jobs:
           echo "- 仓库: ${{ steps.mgrserver_ref.outputs.repo }}" >> release.txt
           echo "- 分支: ${{ steps.mgrserver_ref.outputs.branch }}" >> release.txt
           echo "- Commit: ${MGRSERVER_COMMIT_SHORT}" >> release.txt
-          if [ "${HAS_QCA_NSS_DP:-false}" = "true" ]; then
-            echo "- qca-nss-dp 数据通路加速" >> release.txt
-          fi
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Upload firmware to release
