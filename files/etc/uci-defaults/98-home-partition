@@ -51,6 +51,24 @@ part_name() {
     awk -F= '$1 == "PARTNAME" {print $2}' "/sys/class/block/${1##*/}/uevent" 2>/dev/null | tail -n1
 }
 
+tail_free_range() {
+    parted -f -ms "$DISK" unit s print free 2>/dev/null |
+        awk -F: '$5 ~ /^free/ { start=$2; end=$3 } END { if (start ~ /^[0-9]+s$/ && end ~ /^[0-9]+s$/) { gsub("s", "", start); gsub("s", "", end); print start, end } }'
+}
+
+last_usable_sector() {
+    local total_sectors=''
+
+    total_sectors=$(cat "/sys/class/block/${DISK##*/}/size" 2>/dev/null || true)
+    case "$total_sectors" in
+        ''|*[!0-9]*)
+            return 1
+            ;;
+    esac
+
+    echo $((total_sectors - 34))
+}
+
 is_reserved_part_name() {
     case "$1" in
         ''|rootfs|rootfs_1|rootfs_data|primary)
@@ -139,6 +157,62 @@ find_home_part() {
     find_largest_safe_part
 }
 
+snapshot_parts() {
+    local sys_part=''
+    local base=''
+    local snapshot=''
+
+    for sys_part in /sys/class/block/mmcblk0/mmcblk0p*; do
+        [ -e "$sys_part" ] || continue
+        base=$(basename "$sys_part")
+        snapshot="$snapshot $base"
+    done
+
+    echo "$snapshot"
+}
+
+part_in_snapshot() {
+    case " $1 " in
+        *" $2 "*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+find_new_part_after_partition() {
+    local before_snapshot="$1"
+    local sys_part=''
+    local base=''
+    local candidate=''
+    local size_mib=''
+    local part_name_value=''
+
+    for sys_part in /sys/class/block/mmcblk0/mmcblk0p*; do
+        [ -e "$sys_part" ] || continue
+        base=$(basename "$sys_part")
+        part_in_snapshot "$before_snapshot" "$base" && continue
+
+        candidate="/dev/$base"
+        [ -b "$candidate" ] || continue
+
+        size_mib=$(part_size_mib "$candidate")
+        [ -n "$size_mib" ] || continue
+        [ "$size_mib" -gt "$MIN_HOME_PART_MIB" ] || continue
+
+        part_name_value=$(part_name "$candidate")
+        if [ -n "$part_name_value" ] && is_reserved_part_name "$part_name_value"; then
+            continue
+        fi
+
+        echo "$candidate"
+        return 0
+    done
+
+    return 1
+}
+
 sync_pxe_defaults() {
     [ -d "$PXE_DEFAULTS" ] || return 0
 
@@ -201,11 +275,27 @@ if [ "$HOME_ON_OVERLAY" != '1' ] && [ -z "$PART" ]; then
     echo 'No safe /home partition detected, creating a new primary data partition'
     # 仅使用 parted，避免 fdisk 分区号自动选择的歧义
     if command -v parted >/dev/null 2>&1; then
-        PART_START_MIB=$(parted -ms "$DISK" unit MiB print 2>/dev/null \
-            | awk -F: '$1 ~ /^[0-9]+$/ {gsub("MiB", "", $3); end=$3} END {if (end == "") print ""; else printf "%d", int(end) + 1}')
-        [ -n "$PART_START_MIB" ] || PART_START_MIB='1'
-        run_with_timeout 30 parted -s "$DISK" mkpart primary ext4 "${PART_START_MIB}MiB" 100% \
-            || { echo "parted failed, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
+        PART_SNAPSHOT=$(snapshot_parts)
+        PART_RANGE=$(tail_free_range || true)
+        PART_END_SECTOR=$(last_usable_sector || true)
+        if [ -n "$PART_RANGE" ]; then
+            set -- $PART_RANGE
+            PART_START_SECTOR="$1"
+            if [ -n "$PART_END_SECTOR" ]; then
+                run_with_timeout 30 parted -f -a none -s "$DISK" unit s mkpart primary ext4 "${PART_START_SECTOR}s" "${PART_END_SECTOR}s" \
+                    || { echo "parted failed, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
+            else
+                PART_END_SECTOR="$2"
+                run_with_timeout 30 parted -f -a none -s "$DISK" unit s mkpart primary ext4 "${PART_START_SECTOR}s" "${PART_END_SECTOR}s" \
+                    || { echo "parted failed, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
+            fi
+        else
+            PART_START_MIB=$(parted -f -ms "$DISK" unit MiB print 2>/dev/null \
+                | awk -F: '$1 ~ /^[0-9]+$/ {gsub("MiB", "", $3); end=$3} END {if (end == "") print ""; else printf "%d", int(end) + 1}')
+            [ -n "$PART_START_MIB" ] || PART_START_MIB='1'
+            run_with_timeout 30 parted -f -a none -s "$DISK" mkpart primary ext4 "${PART_START_MIB}MiB" 100% \
+                || { echo "parted failed, falling back to overlay /home"; mkdir -p "$TARGET"; HOME_ON_OVERLAY='1'; }
+        fi
     else
         echo 'parted not available, falling back to overlay /home.'
         mkdir -p "$TARGET"
@@ -215,6 +305,9 @@ if [ "$HOME_ON_OVERLAY" != '1' ] && [ -z "$PART" ]; then
         command -v partprobe >/dev/null 2>&1 && partprobe "$DISK" || true
         sleep 2
         PART=$(find_home_part || true)
+        if [ -z "$PART" ]; then
+            PART=$(find_new_part_after_partition "$PART_SNAPSHOT" || true)
+        fi
         CREATED_PART='1'
     fi
 fi

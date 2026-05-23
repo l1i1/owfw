@@ -1,11 +1,11 @@
 #!/bin/sh
-# Auto-adjust LAN subnet when it conflicts with WAN subnet.
+# Auto-adjust LAN subnet away from upstream networks.
 # Triggered by hotplug on wan ifup events.
 #
-# When the upstream router's LAN and this router's LAN are on the
-# same subnet (e.g., both 192.168.1.0/24), IPv4 routing breaks
-# because the kernel can't disambiguate routes.  This script detects
-# the conflict and moves the LAN to a non-conflicting /24 subnet.
+# Older builds tried to place LAN in the next 192.168.x.0/24 subnet.
+# That misses cases where WAN is 192.168.3.0/24 while LAN remains
+# 192.168.1.0/24.  Use the 10.10.x.0/24 range instead, starting at
+# 10.10.10.0/24 and moving upward if that block is already occupied.
 
 [ "$ACTION" = "ifup" ] || exit 0
 [ "$INTERFACE" = "wan" ] || exit 0
@@ -22,7 +22,7 @@ wan_cidr=$(ip -4 -o addr show dev wan 2>/dev/null | awk '{print $4}')
 lan_ip_cidr=$(uci -q get network.lan.ipaddr 2>/dev/null || echo "")
 [ -n "$lan_ip_cidr" ] || exit 0
 
-# --- 3. Extract /24 prefix for comparison ---
+# --- 3. Extract /24 prefixes for comparison ---
 # Handle both "x.x.x.x" and "x.x.x.x/yy" formats
 wan_ip="${wan_cidr%%/*}"
 wan_prefix=$(echo "$wan_ip" | cut -d. -f1-3)
@@ -30,39 +30,49 @@ wan_prefix=$(echo "$wan_ip" | cut -d. -f1-3)
 lan_ip="${lan_ip_cidr%%/*}"
 lan_prefix=$(echo "$lan_ip" | cut -d. -f1-3)
 
-# Different /24 blocks → no conflict
-[ "$wan_prefix" = "$lan_prefix" ] || exit 0
+# If LAN is already on a non-conflicting 10.10.x.0/24 block, keep it.
+case "$lan_prefix" in
+  10.10.*)
+    [ "$lan_prefix" = "$wan_prefix" ] || exit 0
+    ;;
+esac
 
-# --- 4. Conflict detected — find a non-conflicting /24 ---
-new_third=2
-while [ "$new_third" -le 200 ]; do
-  candidate="192.168.${new_third}"
-  [ "$candidate" = "$wan_prefix" ] || break
+# --- 4. Find a non-conflicting 10.10.x.0/24 ---
+new_third=10
+while [ "$new_third" -le 250 ]; do
+  candidate="10.10.${new_third}"
+  candidate_route="${candidate}.0/24"
+  if [ "$candidate" != "$wan_prefix" ] && ! ip -4 route show 2>/dev/null | awk '{print $1}' | grep -qx "$candidate_route"; then
+    break
+  fi
   new_third=$((new_third + 1))
 done
 
-[ "$new_third" -le 200 ] || {
-  log_msg "no available /24 for LAN (all 192.168.x.0/24 blocked by WAN subnet $wan_prefix)"
+[ "$new_third" -le 250 ] || {
+  log_msg "no available /24 for LAN (10.10.10.0/24-10.10.250.0/24 blocked; WAN=$wan_prefix)"
   exit 1
 }
 
-new_lan_ip="192.168.${new_third}.1/24"
+new_lan_ip="10.10.${new_third}.1"
 
 # --- 5. Apply ---
-log_msg "subnet conflict: WAN=$wan_cidr LAN=$lan_ip_cidr → moving LAN to $new_lan_ip"
+[ "$lan_ip" = "$new_lan_ip" ] && exit 0
+
+log_msg "LAN subnet policy: WAN=$wan_cidr LAN=$lan_ip_cidr -> moving LAN to $new_lan_ip/24"
 
 uci set network.lan.ipaddr="$new_lan_ip"
+uci set network.lan.netmask="255.255.255.0"
 uci commit network
 
 # Reload is gentler than restart — applies config changes without
 # tearing down unrelated interfaces.
 /etc/init.d/network reload 2>/dev/null || true
 
-log_msg "LAN subnet adjusted to $new_lan_ip"
+log_msg "LAN subnet adjusted to $new_lan_ip/24"
 
 # --- 6. Broadcast gratuitous ARP so connected clients pick up the
 #        new gateway quickly (DHCP renewal can take minutes).
 sleep 1
-arping -c 3 -I br-lan -U "${new_lan_ip%%/*}" 2>/dev/null || true
+arping -c 3 -I br-lan -U "$new_lan_ip" 2>/dev/null || true
 
 exit 0
