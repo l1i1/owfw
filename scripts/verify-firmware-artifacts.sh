@@ -85,6 +85,9 @@ for pair in "MANIFEST:$MANIFEST" "CONFIG_BUILDINFO:$CONFIG_BUILDINFO" "PROFILES_
   elif [ ! -f "$file" ]; then
     echo "✗ ERROR: $label is not a regular file: $file"
     METADATA_OK=0
+  elif [ ! -s "$file" ]; then
+    echo "✗ ERROR: $label is empty: $file"
+    METADATA_OK=0
   else
     echo "✓ $label found: $file"
   fi
