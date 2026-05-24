@@ -1626,25 +1626,11 @@ jobs:
           ccache -s || true
           echo -e "$(nproc) thread assembly"
           # All packages are prebuilt in cache (stamps + IPKs hydrated from base build).
-          # Recreate build metadata and reinstall the selected packages into the
-          # target rootfs before image generation with the new files/ overlay.
+          # Recreate build metadata before image generation with the new files/ overlay.
           make buildinfo V=s || echo "buildinfo target unavailable before assembly; will regenerate config.buildinfo after target/install"
-          if ! make package/install -j$(nproc) V=s; then
-            echo "package/install failed with $(nproc) threads, retrying single-thread..."
-            if ! make package/install -j1 V=s; then
-              echo "package/install retry failed; rebuilding packages from cache..."
-              make package/compile -j$(nproc) V=s || make package/compile -j1 V=s || exit 1
-              make package/install -j$(nproc) V=s || make package/install -j1 V=s
-            fi
-          fi
           if ! make target/install -j$(nproc) V=s; then
             echo "target/install failed with $(nproc) threads, retrying single-thread..."
-            if ! make target/install -j1 V=s; then
-              echo "Stamps may be stale, rebuilding packages from cache..."
-              make package/compile -j$(nproc) V=s || make package/compile -j1 V=s || exit 1
-              make package/install -j$(nproc) V=s || make package/install -j1 V=s
-              make target/install -j$(nproc) V=s || make target/install -j1 V=s
-            fi
+            make target/install -j1 V=s
           fi
           # target/install does not run the top-level world post-build targets.
           # Generate the metadata required by artifact verification.
@@ -1676,15 +1662,19 @@ jobs:
           fi
 
           if [ ! -s "$manifest_path" ]; then
-            echo "Manifest is empty after target/install; regenerating from rootfs package status..."
-            status_path="$(find build_dir -type f -path '*/root.orig-*/usr/lib/opkg/status' 2>/dev/null | sort | head -1)"
-            if [ -z "$status_path" ]; then
-              status_path="$(find build_dir -type f -path '*/root-*/usr/lib/opkg/status' 2>/dev/null | sort | head -1)"
+            echo "Manifest is empty after target/install; regenerating from rootfs package database..."
+            package_db_path="$(find staging_dir -type f \( -path '*/root-*/lib/apk/db/installed' -o -path '*/root-*/usr/lib/opkg/status' \) 2>/dev/null | sort | head -1)"
+            if [ -z "$package_db_path" ]; then
+              package_db_path="$(find build_dir -type f \( -path '*/root-*/lib/apk/db/installed' -o -path '*/root-*/usr/lib/opkg/status' \) ! -path '*/root.orig-*' 2>/dev/null | sort | head -1)"
             fi
-            if [ -z "$status_path" ]; then
-              echo "ERROR: unable to locate rootfs opkg status for manifest regeneration" >&2
+            if [ -z "$package_db_path" ]; then
+              package_db_path="$(find build_dir -type f \( -path '*/root.orig-*/lib/apk/db/installed' -o -path '*/root.orig-*/usr/lib/opkg/status' \) 2>/dev/null | sort | head -1)"
+            fi
+            if [ -z "$package_db_path" ]; then
+              echo "ERROR: unable to locate rootfs apk/opkg package database for manifest regeneration" >&2
               exit 1
             fi
+            echo "Using package database: $package_db_path"
             awk '
               BEGIN { RS=""; FS="\n" }
               {
@@ -1692,17 +1682,23 @@ jobs:
                 for (i = 1; i <= NF; i++) {
                   if ($i ~ /^Package: /) {
                     pkg = substr($i, 10)
+                    installed = 1
                   } else if ($i ~ /^Version: /) {
                     version = substr($i, 10)
                   } else if ($i ~ /^Status: / && $i ~ / installed/) {
                     installed = 1
+                  } else if ($i ~ /^P:/) {
+                    pkg = substr($i, 3)
+                    installed = 1
+                  } else if ($i ~ /^V:/) {
+                    version = substr($i, 3)
                   }
                 }
                 if (pkg != "" && version != "" && installed) {
                   print pkg " - " version
                 }
               }
-            ' "$status_path" | sort > "$manifest_path"
+            ' "$package_db_path" | sort > "$manifest_path"
           fi
 
           echo "Generated firmware metadata:"
