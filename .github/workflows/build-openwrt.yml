@@ -447,7 +447,10 @@ jobs:
 
       - name: Load custom configuration
         run: |
-          [ -e files ] && cp -r files openwrt/files
+          if [ -d files ]; then
+            mkdir -p openwrt/files
+            cp -a files/. openwrt/files/
+          fi
           if [ -d package ]; then
             mkdir -p openwrt/package
             cp -r package/. openwrt/package/
@@ -838,7 +841,10 @@ jobs:
 
       - name: Load custom configuration
         run: |
-          [ -e files ] && cp -r files openwrt/files
+          if [ -d files ]; then
+            mkdir -p openwrt/files
+            cp -a files/. openwrt/files/
+          fi
           if [ -d package ]; then
             mkdir -p openwrt/package
             cp -r package/. openwrt/package/
@@ -1441,11 +1447,42 @@ jobs:
         env:
           SKIP_MAKE_DEFCONFIG: "1"
         run: |
-          [ -e files ] && cp -r files openwrt/files
+          if [ -d files ]; then
+            mkdir -p openwrt/files
+            cp -a files/. openwrt/files/
+          fi
           if [ -d package ]; then
             mkdir -p openwrt/package
             cp -r package/. openwrt/package/
           fi
+          PXE_DEFAULTS="openwrt/files/usr/share/mgrserver-defaults/res/pxe"
+          if [ ! -d "$PXE_DEFAULTS" ]; then
+            echo "ERROR: PXE defaults directory missing before OpenWrt build: $PXE_DEFAULTS" >&2
+            find openwrt/files -maxdepth 5 -type f -o -type d | sort >&2
+            exit 1
+          fi
+          if [ ! -s "$PXE_DEFAULTS/config.ini" ]; then
+            printf '%s\n' \
+              '[Auto]' \
+              'Mode = 3' \
+              '' \
+              '[OS]' \
+              'FileName =' \
+              'Index = 7' \
+              'Unattend = 1' \
+              'KeepDesktop = 1' \
+              'InjectVmd = 1' \
+              > "$PXE_DEFAULTS/config.ini"
+          fi
+          for required in config.ini set_pxe.sh up_pxe_res.sh tftpboot res/pe-menu.exe; do
+            if [ ! -e "$PXE_DEFAULTS/$required" ]; then
+              echo "ERROR: staged PXE default missing before OpenWrt build: $PXE_DEFAULTS/$required" >&2
+              find "$PXE_DEFAULTS" -maxdepth 3 -type f -o -type d | sort >&2
+              exit 1
+            fi
+          done
+          echo "PXE defaults staged for OpenWrt rootfs:"
+          find "$PXE_DEFAULTS" -maxdepth 2 -type f -o -type d | sort
           [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
           chmod +x $DIY_P2_SH
           cd openwrt

@@ -908,7 +908,17 @@ require_rootfs_entry "etc/init.d/easytier"
 require_rootfs_entry "etc/config/easytier"
 require_rootfs_entry "usr/lib/lua/luci/controller/easytier.lua"
 require_rootfs_entry "usr/share/rpcd/acl.d/luci-app-easytier.json"
-require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/config.ini"
+if ! rootfs_has_entry "usr/share/mgrserver-defaults/res/pxe/config.ini"; then
+  echo "✗ Missing rootfs entry: /usr/share/mgrserver-defaults/res/pxe/config.ini"
+  if rootfs_has_entry "usr/share/mgrserver-defaults/res/pxe/pxe/config.ini"; then
+    echo "  note: found nested /usr/share/mgrserver-defaults/res/pxe/pxe/config.ini; PXE source directory was copied one level too high"
+  fi
+  if rootfs_has_entry "files/usr/share/mgrserver-defaults/res/pxe/config.ini"; then
+    echo "  note: found /files/usr/share/mgrserver-defaults/res/pxe/config.ini; OpenWrt overlay was copied as openwrt/files/files"
+  fi
+  exit 1
+fi
+echo "✓ rootfs entry present: /usr/share/mgrserver-defaults/res/pxe/config.ini"
 require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/set_pxe.sh"
 require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/up_pxe_res.sh"
 require_rootfs_entry "usr/share/mgrserver-defaults/res/pxe/tftpboot"
