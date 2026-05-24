@@ -58,6 +58,25 @@ echo "Staging PXE resources..."
 mkdir -p "$PXE_DEST"
 cp -a "$PXE_SRC/pxe/." "$PXE_DEST/"
 
+if [ ! -s "$PXE_DEST/config.ini" ]; then
+  cat > "$PXE_DEST/config.ini" <<'EOF'
+[Auto]
+Mode = 3
+
+[OS]
+FileName =
+Index = 7
+Unattend = 1
+KeepDesktop = 1
+InjectVmd = 1
+EOF
+fi
+
+if [ ! -d "$PXE_DEST/tftpboot" ]; then
+  echo "ERROR: PXE tftpboot defaults missing after staging: $PXE_DEST/tftpboot" >&2
+  exit 1
+fi
+
 if [ -d "$PXE_DEST/res" ]; then
   (
     cd "$PXE_DEST/res"
