@@ -1665,6 +1665,50 @@ jobs:
           # All packages are prebuilt in cache (stamps + IPKs hydrated from base build).
           # Recreate build metadata before image generation with the new files/ overlay.
           make buildinfo V=s || echo "buildinfo target unavailable before assembly; will regenerate config.buildinfo after target/install"
+
+          if [ -d files ]; then
+            mapfile -t rootfs_staging_dirs < <(
+              find staging_dir build_dir \
+                -type d \
+                \( -name 'root-*' -o -name 'rootfs' \) \
+                ! -name 'root.orig-*' \
+                2>/dev/null | sort
+            )
+            if [ "${#rootfs_staging_dirs[@]}" -eq 0 ]; then
+              echo "ERROR: unable to locate hydrated rootfs staging directory before image assembly" >&2
+              find staging_dir build_dir -maxdepth 4 -type d -name 'root*' 2>/dev/null | sort >&2 || true
+              exit 1
+            fi
+
+            echo "Syncing OpenWrt files overlay into hydrated rootfs staging directories..."
+            for rootfs_dir in "${rootfs_staging_dirs[@]}"; do
+              echo "  files/ -> $rootfs_dir/"
+              rsync -a files/ "$rootfs_dir/"
+            done
+
+            pxe_rootfs_rel="usr/share/mgrserver-defaults/res/pxe"
+            pxe_rootfs_ok=0
+            for rootfs_dir in "${rootfs_staging_dirs[@]}"; do
+              if [ -s "$rootfs_dir/$pxe_rootfs_rel/config.ini" ] && \
+                 [ -f "$rootfs_dir/$pxe_rootfs_rel/set_pxe.sh" ] && \
+                 [ -f "$rootfs_dir/$pxe_rootfs_rel/up_pxe_res.sh" ] && \
+                 [ -d "$rootfs_dir/$pxe_rootfs_rel/tftpboot" ] && \
+                 [ -f "$rootfs_dir/$pxe_rootfs_rel/res/pe-menu.exe" ]; then
+                pxe_rootfs_ok=1
+                echo "PXE defaults present in rootfs staging: $rootfs_dir/$pxe_rootfs_rel"
+                break
+              fi
+            done
+            if [ "$pxe_rootfs_ok" -ne 1 ]; then
+              echo "ERROR: PXE defaults were not synced into any rootfs staging directory" >&2
+              for rootfs_dir in "${rootfs_staging_dirs[@]}"; do
+                echo "  inspected: $rootfs_dir/$pxe_rootfs_rel" >&2
+                find "$rootfs_dir/usr/share/mgrserver-defaults" -maxdepth 5 \( -type f -o -type d \) 2>/dev/null | sort >&2 || true
+              done
+              exit 1
+            fi
+          fi
+
           if ! make target/install -j$(nproc) V=s; then
             echo "target/install failed with $(nproc) threads, retrying single-thread..."
             make target/install -j1 V=s
