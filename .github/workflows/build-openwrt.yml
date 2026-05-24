@@ -1628,10 +1628,14 @@ jobs:
           # All packages are prebuilt in cache (stamps + IPKs hydrated from base build).
           # Recreate build metadata and reinstall the selected packages into the
           # target rootfs before image generation with the new files/ overlay.
-          make buildinfo V=s
+          make buildinfo V=s || echo "buildinfo target unavailable before assembly; will regenerate config.buildinfo after target/install"
           if ! make package/install -j$(nproc) V=s; then
             echo "package/install failed with $(nproc) threads, retrying single-thread..."
-            make package/install -j1 V=s
+            if ! make package/install -j1 V=s; then
+              echo "package/install retry failed; rebuilding packages from cache..."
+              make package/compile -j$(nproc) V=s || make package/compile -j1 V=s || exit 1
+              make package/install -j$(nproc) V=s || make package/install -j1 V=s
+            fi
           fi
           if ! make target/install -j$(nproc) V=s; then
             echo "target/install failed with $(nproc) threads, retrying single-thread..."
@@ -1644,7 +1648,8 @@ jobs:
           fi
           # target/install does not run the top-level world post-build targets.
           # Generate the metadata required by artifact verification.
-          make buildinfo json_overview_image_info V=s
+          make buildinfo V=s || echo "buildinfo target unavailable after assembly; falling back to scripts/diffconfig.sh"
+          make json_overview_image_info V=s
 
           target_dir="$(find bin/targets -mindepth 2 -maxdepth 2 -type d | head -1)"
           if [ -z "$target_dir" ]; then
