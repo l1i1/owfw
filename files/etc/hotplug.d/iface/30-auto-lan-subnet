@@ -14,6 +14,54 @@ log_msg() {
   logger -t "auto-lan-subnet" "$1" 2>/dev/null || true
 }
 
+sync_pxe_dhcp_server() {
+  local pxe_lan_ip="$1"
+  local dnsmasq_section=""
+  local server_name=""
+  local update_needed=0
+  local section=""
+  local filename=""
+  local current=""
+
+  pxe_lan_ip="${pxe_lan_ip%%/*}"
+  [ -n "$pxe_lan_ip" ] || return 0
+
+  dnsmasq_section=$(uci show dhcp 2>/dev/null | awk -F'[.=]' '/=dnsmasq$/ {print $2; exit}')
+  [ -n "$dnsmasq_section" ] || return 0
+
+  server_name=$(uci -q get system.@system[0].hostname 2>/dev/null || echo yushu-router)
+  current=$(uci -q get dhcp.${dnsmasq_section}.dhcp_boot 2>/dev/null || true)
+  case "$current" in
+    ipxe.efi,*|/ipxe.efi,*|undionly.kpxe,*|/undionly.kpxe,*)
+      if [ "$current" != "ipxe.efi,${server_name},${pxe_lan_ip}" ]; then
+        uci set dhcp.${dnsmasq_section}.dhcp_boot="ipxe.efi,${server_name},${pxe_lan_ip}"
+        update_needed=1
+      fi
+      ;;
+  esac
+
+  for section in $(uci show dhcp 2>/dev/null | awk -F'[.=]' '/=boot$/ {print $2}'); do
+    filename=$(uci -q get dhcp.${section}.filename 2>/dev/null || true)
+    case "$filename" in
+      *ipxe.efi*|*autoexec.ipxe*|*undionly.kpxe*)
+        if [ "$(uci -q get dhcp.${section}.serveraddress 2>/dev/null || true)" != "$pxe_lan_ip" ]; then
+          uci set dhcp.${section}.serveraddress="$pxe_lan_ip"
+          update_needed=1
+        fi
+        if [ "$(uci -q get dhcp.${section}.servername 2>/dev/null || true)" != "$server_name" ]; then
+          uci set dhcp.${section}.servername="$server_name"
+          update_needed=1
+        fi
+        ;;
+    esac
+  done
+
+  [ "$update_needed" = "1" ] || return 0
+  uci commit dhcp
+  /etc/init.d/dnsmasq restart 2>/dev/null || true
+  log_msg "PXE DHCP server address synced to $pxe_lan_ip"
+}
+
 # --- 1. Get WAN IPv4 CIDR (e.g. "192.168.1.7/24") ---
 wan_cidr=$(ip -4 -o addr show dev wan 2>/dev/null | awk '{print $4}')
 [ -n "$wan_cidr" ] || exit 0
@@ -33,7 +81,10 @@ lan_prefix=$(echo "$lan_ip" | cut -d. -f1-3)
 # If LAN is already on a non-conflicting 10.10.x.0/24 block, keep it.
 case "$lan_prefix" in
   10.10.*)
-    [ "$lan_prefix" = "$wan_prefix" ] || exit 0
+    if [ "$lan_prefix" != "$wan_prefix" ]; then
+      sync_pxe_dhcp_server "$lan_ip"
+      exit 0
+    fi
     ;;
 esac
 
@@ -69,6 +120,7 @@ uci commit network
 /etc/init.d/network reload 2>/dev/null || true
 
 log_msg "LAN subnet adjusted to $new_lan_ip/24"
+sync_pxe_dhcp_server "$new_lan_ip"
 
 # --- 6. Broadcast gratuitous ARP so connected clients pick up the
 #        new gateway quickly (DHCP renewal can take minutes).
