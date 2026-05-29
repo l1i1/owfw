@@ -1454,13 +1454,16 @@ jobs:
           OPENWRT_ROOT="$GITHUB_WORKSPACE/openwrt"
           MGRSERVER_OVERLAY="$GITHUB_WORKSPACE/mgrserver-overlay"
 
-          if [ -d "$MGRSERVER_OVERLAY/files/root/mgrserver" ]; then
+          # actions/upload-artifact@v4 strips the common path prefix ('files/').
+          # Artifact contains: root/mgrserver/ and usr/share/mgrserver-defaults/
+          # (NOT files/root/mgrserver/ — the files/ prefix is stripped)
+          if [ -d "$MGRSERVER_OVERLAY/root/mgrserver" ]; then
             mkdir -p "$OPENWRT_ROOT/files/root/mgrserver"
-            cp -a "$MGRSERVER_OVERLAY/files/root/mgrserver/." "$OPENWRT_ROOT/files/root/mgrserver/"
+            cp -a "$MGRSERVER_OVERLAY/root/mgrserver/." "$OPENWRT_ROOT/files/root/mgrserver/"
           fi
-          if [ -d "$MGRSERVER_OVERLAY/files/usr/share/mgrserver-defaults" ]; then
+          if [ -d "$MGRSERVER_OVERLAY/usr/share/mgrserver-defaults" ]; then
             mkdir -p "$OPENWRT_ROOT/files/usr/share/mgrserver-defaults"
-            cp -a "$MGRSERVER_OVERLAY/files/usr/share/mgrserver-defaults/." "$OPENWRT_ROOT/files/usr/share/mgrserver-defaults/"
+            cp -a "$MGRSERVER_OVERLAY/usr/share/mgrserver-defaults/." "$OPENWRT_ROOT/files/usr/share/mgrserver-defaults/"
           fi
 
           echo "MgrServer overlay applied to OpenWrt files:"
