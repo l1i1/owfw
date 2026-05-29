@@ -1479,12 +1479,19 @@ jobs:
             mkdir -p "$OPENWRT_ROOT/files"
             cp -a files/. "$OPENWRT_ROOT/files/"
           fi
-          # Always force-copy repo's package/ to pick up new/changed custom packages.
-          # The handoff may have a stale package/ from the base build.
+          # Refresh only repo-owned custom package directories. Keep OpenWrt's
+          # package/ tree intact; it contains core build files such as package/Makefile.
           if [ -d package ]; then
-            rm -rf "$OPENWRT_ROOT/package"
-            mkdir -p "$OPENWRT_ROOT/package"
-            cp -r package/. "$OPENWRT_ROOT/package/"
+            while IFS= read -r -d '' package_makefile; do
+              package_dir="${package_makefile%/Makefile}"
+              mkdir -p "$OPENWRT_ROOT/$(dirname "$package_dir")"
+              rm -rf "$OPENWRT_ROOT/$package_dir"
+              cp -a "$package_dir" "$OPENWRT_ROOT/$(dirname "$package_dir")/"
+            done < <(find package -mindepth 2 -name Makefile -print0)
+            if [ ! -f "$OPENWRT_ROOT/package/Makefile" ]; then
+              echo "ERROR: OpenWrt package/Makefile is missing after applying custom packages" >&2
+              exit 1
+            fi
           fi
 
       - name: Extract prebuilt IPKs into files overlay
