@@ -1516,6 +1516,28 @@ jobs:
           SKIP_MAKE_DEFCONFIG=1 "$GITHUB_WORKSPACE/$DIY_P2_SH"
           make defconfig
 
+          ensure_config() {
+            local pattern="$1"
+            if ! grep -qx "$pattern" .config; then
+              echo "$pattern" >> .config
+            fi
+          }
+
+          ensure_config "CONFIG_NODEJS_22=y"
+          ensure_config "CONFIG_PACKAGE_node=y"
+          ensure_config "CONFIG_PACKAGE_node-npm=y"
+          ensure_config "CONFIG_PACKAGE_python3=y"
+          ensure_config "CONFIG_PACKAGE_kmod-tun=y"
+          ensure_config "CONFIG_PACKAGE_kmod-inet-diag=y"
+          ensure_config "CONFIG_PACKAGE_kmod-nft-queue=y"
+          ensure_config "CONFIG_PACKAGE_luci-compat=y"
+          ensure_config "CONFIG_PACKAGE_aria2=y"
+          ensure_config "CONFIG_ARIA2_OPENSSL=y"
+          ensure_config "CONFIG_PACKAGE_parted=y"
+          ensure_config "CONFIG_PACKAGE_hostapd-utils=y"
+          ensure_config "CONFIG_PACKAGE_miniupnpd-nftables=y"
+          ensure_config "CONFIG_PACKAGE_socat=y"
+
       - name: Extract prebuilt IPKs into files overlay
         run: bash "$GITHUB_WORKSPACE/scripts/extract-prebuilt-ipks.sh"
 
