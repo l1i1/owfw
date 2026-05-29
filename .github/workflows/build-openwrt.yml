@@ -1494,6 +1494,23 @@ jobs:
             fi
           fi
 
+      - name: Restore build configuration for reuse path
+        if: needs.resolve_base_build.outputs.reuse_base == 'true'
+        run: |
+          set -euo pipefail
+          OPENWRT_ROOT="$GITHUB_WORKSPACE/openwrt"
+
+          if [ ! -e "$CONFIG_FILE" ]; then
+            echo "ERROR: missing build config template: $CONFIG_FILE" >&2
+            exit 1
+          fi
+
+          cp "$CONFIG_FILE" "$OPENWRT_ROOT/.config"
+          chmod +x "$GITHUB_WORKSPACE/$DIY_P2_SH"
+          cd "$OPENWRT_ROOT"
+          SKIP_MAKE_DEFCONFIG=1 "$GITHUB_WORKSPACE/$DIY_P2_SH"
+          make defconfig
+
       - name: Extract prebuilt IPKs into files overlay
         run: bash "$GITHUB_WORKSPACE/scripts/extract-prebuilt-ipks.sh"
 
