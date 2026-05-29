@@ -1631,18 +1631,21 @@ jobs:
           echo -e "$(nproc) thread assembly"
           make buildinfo V=s || echo "buildinfo target unavailable before assembly"
 
-          if [ -d files ]; then
-            mapfile -t rootfs_staging_dirs < <(
-              find staging_dir build_dir \
-                -type d \
-                \( -name 'root-*' -o -name 'rootfs' \) \
-                ! -name 'root.orig-*' \
-                2>/dev/null | sort
-            )
+          find_rootfs_staging_dirs() {
+            find staging_dir build_dir \
+              -type d \
+              \( -name 'root-*' -o -name 'rootfs' \) \
+              ! -name 'root.orig-*' \
+              2>/dev/null | sort
+          }
+
+          sync_files_overlay_to_rootfs() {
+            local rootfs_dir
+            local -a rootfs_staging_dirs
+
+            mapfile -t rootfs_staging_dirs < <(find_rootfs_staging_dirs)
             if [ "${#rootfs_staging_dirs[@]}" -eq 0 ]; then
-              echo "ERROR: unable to locate hydrated rootfs staging directory before image assembly" >&2
-              find staging_dir build_dir -maxdepth 4 -type d -name 'root*' 2>/dev/null | sort >&2 || true
-              exit 1
+              return 1
             fi
 
             echo "Syncing OpenWrt files overlay into hydrated rootfs staging directories..."
@@ -1650,33 +1653,53 @@ jobs:
               echo "  files/ -> $rootfs_dir/"
               rsync -a files/ "$rootfs_dir/"
             done
+          }
 
-            pxe_rootfs_rel="usr/share/mgrserver-defaults/res/pxe"
-            pxe_rootfs_ok=0
+          validate_pxe_defaults_in_rootfs() {
+            local rootfs_dir
+            local pxe_rootfs_rel="usr/share/mgrserver-defaults/res/pxe"
+            local -a rootfs_staging_dirs
+
+            mapfile -t rootfs_staging_dirs < <(find_rootfs_staging_dirs)
+            if [ "${#rootfs_staging_dirs[@]}" -eq 0 ]; then
+              echo "ERROR: unable to locate hydrated rootfs staging directory after image assembly" >&2
+              find staging_dir build_dir -maxdepth 4 -type d -name 'root*' 2>/dev/null | sort >&2 || true
+              return 1
+            fi
+
             for rootfs_dir in "${rootfs_staging_dirs[@]}"; do
               if [ -s "$rootfs_dir/$pxe_rootfs_rel/config.ini" ] && \
                  [ -f "$rootfs_dir/$pxe_rootfs_rel/set_pxe.sh" ] && \
                  [ -f "$rootfs_dir/$pxe_rootfs_rel/up_pxe_res.sh" ] && \
                  [ -d "$rootfs_dir/$pxe_rootfs_rel/tftpboot" ] && \
                  [ -f "$rootfs_dir/$pxe_rootfs_rel/res/pe-menu.exe" ]; then
-                pxe_rootfs_ok=1
                 echo "PXE defaults present in rootfs staging: $rootfs_dir/$pxe_rootfs_rel"
-                break
+                return 0
               fi
             done
-            if [ "$pxe_rootfs_ok" -ne 1 ]; then
-              echo "ERROR: PXE defaults were not synced into any rootfs staging directory" >&2
-              for rootfs_dir in "${rootfs_staging_dirs[@]}"; do
-                echo "  inspected: $rootfs_dir/$pxe_rootfs_rel" >&2
-                find "$rootfs_dir/usr/share/mgrserver-defaults" -maxdepth 5 \( -type f -o -type d \) 2>/dev/null | sort >&2 || true
-              done
-              exit 1
+
+            echo "ERROR: PXE defaults are missing from rootfs staging directories" >&2
+            for rootfs_dir in "${rootfs_staging_dirs[@]}"; do
+              echo "  inspected: $rootfs_dir/$pxe_rootfs_rel" >&2
+              find "$rootfs_dir/usr/share/mgrserver-defaults" -maxdepth 5 \( -type f -o -type d \) 2>/dev/null | sort >&2 || true
+            done
+            return 1
+          }
+
+          if [ -d files ]; then
+            if sync_files_overlay_to_rootfs; then
+              echo "Pre-existing rootfs staging directories were refreshed before image assembly."
+            else
+              echo "No pre-existing rootfs staging directory found; target/install will hydrate it from files/."
             fi
           fi
 
           if ! make target/install -j$(nproc) V=s; then
             echo "target/install failed with $(nproc) threads, retrying single-thread..."
             make target/install -j1 V=s
+          fi
+          if [ -d files ]; then
+            validate_pxe_defaults_in_rootfs
           fi
           make buildinfo V=s || echo "buildinfo target unavailable after assembly"
           make json_overview_image_info V=s
