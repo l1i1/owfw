@@ -1509,7 +1509,6 @@ jobs:
           chmod +x "$GITHUB_WORKSPACE/$DIY_P2_SH"
           cd "$OPENWRT_ROOT"
           SKIP_MAKE_DEFCONFIG=1 "$GITHUB_WORKSPACE/$DIY_P2_SH"
-          make defconfig
 
       - name: Extract prebuilt IPKs into files overlay
         run: bash "$GITHUB_WORKSPACE/scripts/extract-prebuilt-ipks.sh"
