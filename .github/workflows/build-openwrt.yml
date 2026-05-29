@@ -1506,9 +1506,15 @@ jobs:
           fi
 
           cp "$CONFIG_FILE" "$OPENWRT_ROOT/.config"
+          [ -e "$FEEDS_CONF" ] && cp "$FEEDS_CONF" "$OPENWRT_ROOT/feeds.conf.default"
+          chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
           chmod +x "$GITHUB_WORKSPACE/$DIY_P2_SH"
           cd "$OPENWRT_ROOT"
+          "$GITHUB_WORKSPACE/$DIY_P1_SH"
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
           SKIP_MAKE_DEFCONFIG=1 "$GITHUB_WORKSPACE/$DIY_P2_SH"
+          make defconfig
 
       - name: Extract prebuilt IPKs into files overlay
         run: bash "$GITHUB_WORKSPACE/scripts/extract-prebuilt-ipks.sh"
