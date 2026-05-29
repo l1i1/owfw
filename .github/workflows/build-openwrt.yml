@@ -864,7 +864,7 @@ jobs:
             git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev \
             libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev \
             libssl-dev libtool lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 \
-            python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig \
+            python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig m4 \
             texinfo uglifyjs u-boot-tools upx-ucl unzip vim wget xmlto xxd zlib1g-dev
           sudo -E systemctl daemon-reload
           sudo -E apt-get -y autoremove --purge
@@ -1069,6 +1069,35 @@ jobs:
           find "$OPENWRT_ROOT/build_dir" -type f \( -name '.built' -o -name '.configured' -o -name '.prepared' -o -name '.stamp_*' \) -exec touch -c {} + 2>/dev/null || true
           find "$OPENWRT_ROOT/staging_dir" -type f \( -name '.stamp_*' -o -name '.built' \) -exec touch -c {} + 2>/dev/null || true
           echo "Build stamps refreshed."
+
+      - name: Restore reusable toolchain cache
+        if: needs.resolve_base_build.outputs.reuse_base == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            openwrt/staging_dir/host
+            openwrt/staging_dir/hostpkg
+            openwrt/staging_dir/toolchain-*
+            openwrt/build_dir/hostpkg
+            openwrt/build_dir/toolchain-*
+          key: ${{ runner.os }}-openwrt-toolchain-${{ needs.resolve_base_build.outputs.openwrt_commit }}-reuse
+          restore-keys: |
+            ${{ runner.os }}-openwrt-toolchain-${{ needs.resolve_base_build.outputs.openwrt_commit }}-
+            ${{ runner.os }}-openwrt-toolchain-
+
+      - name: Refresh reusable toolchain stamps
+        if: needs.resolve_base_build.outputs.reuse_base == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OPENWRT_ROOT="$GITHUB_WORKSPACE/openwrt"
+          echo "Touching reusable toolchain artifacts after cache restore..."
+          find "$OPENWRT_ROOT/staging_dir/host" "$OPENWRT_ROOT/staging_dir/hostpkg" "$OPENWRT_ROOT/staging_dir"/toolchain-* \
+            -type f \( -name '.stamp_*' -o -name '.built' \) -exec touch -c {} + 2>/dev/null || true
+          find "$OPENWRT_ROOT/build_dir/hostpkg" "$OPENWRT_ROOT/build_dir"/toolchain-* \
+            -type f \( -name '.built' -o -name '.configured' -o -name '.prepared' -o -name '.stamp_*' \) -exec touch -c {} + 2>/dev/null || true
+          echo "Reusable toolchain stamps refreshed."
 
       # ===== Full path: reuse_base=false — full OpenWrt setup =====
       - name: Compute cache fingerprints
