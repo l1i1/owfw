@@ -1078,6 +1078,7 @@ jobs:
             openwrt/staging_dir/host
             openwrt/staging_dir/hostpkg
             openwrt/staging_dir/toolchain-*
+            openwrt/build_dir/host
             openwrt/build_dir/hostpkg
             openwrt/build_dir/toolchain-*
           key: ${{ runner.os }}-openwrt-toolchain-${{ needs.resolve_base_build.outputs.openwrt_commit }}-reuse
@@ -1095,7 +1096,7 @@ jobs:
           echo "Touching reusable toolchain artifacts after cache restore..."
           find "$OPENWRT_ROOT/staging_dir/host" "$OPENWRT_ROOT/staging_dir/hostpkg" "$OPENWRT_ROOT/staging_dir"/toolchain-* \
             -type f \( -name '.stamp_*' -o -name '.built' \) -exec touch -c {} + 2>/dev/null || true
-          find "$OPENWRT_ROOT/build_dir/hostpkg" "$OPENWRT_ROOT/build_dir"/toolchain-* \
+          find "$OPENWRT_ROOT/build_dir/host" "$OPENWRT_ROOT/build_dir/hostpkg" "$OPENWRT_ROOT/build_dir"/toolchain-* \
             -type f \( -name '.built' -o -name '.configured' -o -name '.prepared' -o -name '.stamp_*' \) -exec touch -c {} + 2>/dev/null || true
           echo "Reusable toolchain stamps refreshed."
 
@@ -1493,6 +1494,11 @@ jobs:
           if [ -d "$MGRSERVER_OVERLAY/usr/share/mgrserver-defaults" ]; then
             mkdir -p "$OPENWRT_ROOT/files/usr/share/mgrserver-defaults"
             cp -a "$MGRSERVER_OVERLAY/usr/share/mgrserver-defaults/." "$OPENWRT_ROOT/files/usr/share/mgrserver-defaults/"
+          fi
+
+          pxe_defaults="$OPENWRT_ROOT/files/usr/share/mgrserver-defaults/res/pxe"
+          if [ -d "$pxe_defaults" ]; then
+            find "$pxe_defaults" -type f -name '*.sh' -exec chmod 0755 {} +
           fi
 
           echo "MgrServer overlay applied to OpenWrt files:"
