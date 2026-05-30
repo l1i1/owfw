@@ -1020,6 +1020,23 @@ jobs:
             rsync -a "$HANDOFF_ROOT/dl/" "$OPENWRT_ROOT/dl/"
           fi
 
+          CACHE_ROOT="$GITHUB_WORKSPACE/.cache/openwrt-target-package"
+          if [ -d "$CACHE_ROOT" ]; then
+            echo "Hydrating cached target/package tree into the build tree..."
+            if [ -d "$CACHE_ROOT/bin/packages" ]; then
+              mkdir -p "$OPENWRT_ROOT/bin/packages"
+              rsync -a "$CACHE_ROOT/bin/packages/" "$OPENWRT_ROOT/bin/packages/"
+            fi
+            if [ -d "$CACHE_ROOT/staging_dir" ]; then
+              mkdir -p "$OPENWRT_ROOT/staging_dir"
+              rsync -a "$CACHE_ROOT/staging_dir/" "$OPENWRT_ROOT/staging_dir/"
+            fi
+            if [ -d "$CACHE_ROOT/build_dir" ]; then
+              mkdir -p "$OPENWRT_ROOT/build_dir"
+              rsync -a "$CACHE_ROOT/build_dir/" "$OPENWRT_ROOT/build_dir/"
+            fi
+          fi
+
           echo "Configuring ccache..."
           ccache --max-size=15G
           ccache -z
