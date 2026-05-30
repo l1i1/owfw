@@ -58,7 +58,7 @@ if [ -n "$FACTORY" ]; then
   fi
 else
   echo "✗ ERROR: factory.bin not found!"
-  echo "  Expected: immortalwrt-qualcommax-ipq60xx-jdcloud_re-ss-01-squashfs-factory.bin"
+  echo "  Expected: yushu_router-qualcommax-ipq60xx-jdcloud_re-ss-01-squashfs-factory.bin"
   exit 1
 fi
 
